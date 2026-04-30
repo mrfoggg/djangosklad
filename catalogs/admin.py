@@ -44,17 +44,21 @@ class ProductSupplierInline(TabularInline):
 
 class SubsidiariesInline(TabularInline):
     model = Contractor
-    fk_name = "parent_holding"  # Указываем, какое поле связывает дочернюю компанию с родителем
-    extra = 0
-    # Показываем только основные поля дочерних компаний
-    fields = ("get_full_name", "legal_type", "is_supplier", "is_customer")
-    readonly_fields = ("get_full_name",)
-    verbose_name = _("Дочерняя компания / Филиал")
-    verbose_name_plural = _("Входящие в холдинг компании")
+    fk_name = "parent_holding"
 
-    @admin.display(description=_("Наименование"))
-    def get_full_name(self, obj):
-        return str(obj)
+    # Убираем пустые строки для создания
+    extra = 0
+    max_num = 0
+
+    # Оставляем только нужные поля и делаем их только для чтения
+    fields = ("last_name", "legal_type", "is_supplier", "is_customer")
+    readonly_fields = ("last_name", "legal_type", "is_supplier", "is_customer")
+
+    # Добавляем ссылку для быстрого перехода в карточку дочерней компании
+    show_change_link = True
+
+    verbose_name = _("Дочерняя компания")
+    verbose_name_plural = _("Входящие в холдинг компании")
 
 
 # --- АДМИН-КЛАССЫ ---
