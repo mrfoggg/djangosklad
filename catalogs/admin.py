@@ -1,3 +1,175 @@
+from django import forms
 from django.contrib import admin
+from django.utils.translation import gettext_lazy as _
+from django_countries.widgets import CountrySelectWidget
+from unfold.admin import ModelAdmin, StackedInline, TabularInline
 
-# Register your models here.
+from .models import Brand, Contractor, ContractorLegalDetails, Product, ProductSupplier
+
+# --- ИНЛАЙНЫ (Вспомогательные модели внутри основных) ---
+
+
+class LegalDetailsInline(StackedInline):
+    model = ContractorLegalDetails
+    can_delete = False
+    verbose_name = _("Юридические реквизиты")
+    verbose_name_plural = _("Юридические реквизиты")
+    fieldsets = ((None, {"fields": (("inn", "iban"), "legal_address")}),)
+
+
+class ProductSupplierInline(TabularInline):
+    """Отображение поставщиков прямо в карточке товара"""
+
+    model = ProductSupplier
+    extra = 1
+    # Ограничиваем выбор только теми, кто реально является поставщиком
+    autocomplete_fields = ["supplier"]
+    fields = ("supplier", "supplier_sku")
+    verbose_name = _("Связь с поставщиком")
+    verbose_name_plural = _("Список поставщиков этого товара")
+
+
+class SubsidiariesInline(TabularInline):
+    model = Contractor
+    fk_name = "parent_holding"  # Указываем, какое поле связывает дочернюю компанию с родителем
+    extra = 0
+    # Показываем только основные поля дочерних компаний
+    fields = ("get_full_name", "legal_type", "is_supplier", "is_customer")
+    readonly_fields = ("get_full_name",)
+    verbose_name = _("Дочерняя компания / Филиал")
+    verbose_name_plural = _("Входящие в холдинг компании")
+
+    @admin.display(description=_("Наименование"))
+    def get_full_name(self, obj):
+        return str(obj)
+
+
+# --- АДМИН-КЛАССЫ ---
+
+
+@admin.register(Contractor)
+class ContractorAdmin(ModelAdmin):
+    # Поиск по ИНН работает через связь legal_details
+    search_fields = ("last_name", "first_name", "email", "legal_details__inn")
+
+    list_display = (
+        "get_full_name",
+        "legal_type",
+        "parent_holding",
+        "is_supplier",
+        "is_customer",
+        "dt_created",
+    )
+
+    list_filter = (
+        "legal_type",
+        "is_supplier",
+        "is_customer",
+        "dt_created",
+    )
+
+    inlines = [LegalDetailsInline, SubsidiariesInline]
+
+    fieldsets = (
+        (
+            _("Основная информация"),
+            {
+                "fields": (
+                    "legal_type",
+                    "ownership_type",
+                    "parent_holding",
+                    ("last_name", "first_name", "middle_name"),
+                )
+            },
+        ),
+        (
+            _("Контакты и роли"),
+            {"fields": (("email", "is_supplier", "is_customer"), "comment")},
+        ),
+        (
+            _("Служебная информация"),
+            {
+                "fields": ("dt_created", "dt_updated"),
+                "classes": ("collapse",),
+            },
+        ),
+    )
+
+    readonly_fields = ("dt_created", "dt_updated")
+
+    @admin.display(description=_("Полное наименование"))
+    def get_full_name(self, obj):
+        return str(obj)
+
+    get_full_name.admin_order_field = "last_name"
+
+
+@admin.register(Product)
+class ProductAdmin(ModelAdmin):
+    list_display = ("get_name", "sku", "main_supplier", "external_id", "dt_created")
+    list_filter = ("dt_created",)
+    search_fields = ("name", "site_name", "sku", "external_id")
+
+    # Подключаем возможность добавлять поставщиков в карточке товара
+    inlines = [ProductSupplierInline]
+
+    fieldsets = (
+        (
+            _("Наименования"),
+            {
+                "fields": ("name", "site_name", "fiscal_name"),
+            },
+        ),
+        (
+            _("Идентификаторы и логистика"),
+            {
+                "fields": (("sku", "external_id"), "main_supplier"),
+            },
+        ),
+        (
+            _("Даты"),
+            {
+                "fields": ("dt_created", "dt_updated"),
+                "classes": ("collapse",),
+            },
+        ),
+    )
+
+    readonly_fields = ("dt_created", "dt_updated")
+
+    @admin.display(description=_("Название"))
+    def get_name(self, obj):
+        return str(obj)
+
+    get_name.admin_order_field = "name"
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        """Фильтр: в 'Основной поставщик' только те, кто уже добавлен к товару"""
+        if db_field.name == "main_supplier":
+            object_id = request.resolver_match.kwargs.get("object_id")
+            if object_id:
+                kwargs["queryset"] = ProductSupplier.objects.filter(
+                    product_id=object_id
+                )
+            else:
+                kwargs["queryset"] = ProductSupplier.objects.none()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+
+@admin.register(ProductSupplier)
+class ProductSupplierAdmin(ModelAdmin):
+    """Отдельный список связей (если нужно править артикулы массово)"""
+
+    list_display = ("product", "supplier", "supplier_sku")
+    search_fields = ("product__name", "supplier__last_name", "supplier_sku")
+    autocomplete_fields = ["product", "supplier"]
+
+
+class BrandAdminForm(forms.ModelForm):
+    class Meta:
+        model = Brand
+        fields = "__all__"
+        widgets = {
+            "origin_country": CountrySelectWidget(),
+            "production_country": CountrySelectWidget(),
+        }
