@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.utils.translation import gettext_lazy as _
+from djmoney.models.fields import MoneyField
 from unfold.admin import ModelAdmin, TabularInline
+from unfold.widgets import UnfoldAdminMoneyWidget
 
 from .models import SupplierPriceItem, SupplierPriceList
 
@@ -11,6 +13,9 @@ class SupplierPriceItemInline(TabularInline):
     # Здесь можно будет добавить отображение цены в UAH,
     # если у поставщика включен признак use_usd_prices.
     fields = ("product", "price")
+    formfield_overrides = {
+        MoneyField: {"widget": UnfoldAdminMoneyWidget},
+    }
 
 
 @admin.register(SupplierPriceList)

@@ -15,19 +15,19 @@ class BaseDocumentModel(models.Model):
     )
     dt_updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
 
-    # Флаг применения документа к учету
+    # Флаг проведения документа
     is_applied = models.BooleanField(
-        verbose_name=_("Применен"),
+        verbose_name=_("Проведен"),
         default=False,
         db_index=True,
-        help_text=_("Документ проведен и учитывается в остатках"),
+        help_text=_("Документ проведен"),
     )
     dt_applied = models.DateTimeField(
-        verbose_name=_("Дата применения"), null=True, blank=True, editable=False
+        verbose_name=_("Дата проведения"), null=True, blank=True, editable=False
     )
 
     to_remove = models.BooleanField(
-        verbose_name=_("В корзине"), default=False, db_index=True
+        verbose_name=_("Помечен на удаление"), default=False, db_index=True
     )
 
     class Meta:
@@ -35,7 +35,7 @@ class BaseDocumentModel(models.Model):
         ordering = ["-dt_created"]
 
     def __str__(self):
-        status = _("Применен") if self.is_applied else _("Черновик")
+        status = _("Проведен") if self.is_applied else _("Черновик")
         return f"{self._meta.verbose_name} №{self.id} ({status})"
 
 
