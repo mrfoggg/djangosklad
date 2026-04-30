@@ -140,6 +140,26 @@ class ContractorLegalDetails(models.Model):
         verbose_name = _("Официальные реквизиты")
 
 
+class ContractorLink(models.Model):
+    contractor = models.ForeignKey(
+        Contractor,
+        on_delete=models.CASCADE,
+        related_name="links",
+        verbose_name=_("Контрагент"),
+    )
+    name = models.CharField(
+        _("Название"), max_length=100, help_text=_("Например: Сайт, Instagram, Прайс")
+    )
+    url = models.URLField(_("Ссылка"), max_length=500)
+
+    class Meta:
+        verbose_name = _("Ссылка")
+        verbose_name_plural = _("Ссылки")
+
+    def __str__(self):
+        return f"{self.name}: {self.url}"
+
+
 class Product(BaseModel):
     name = models.CharField(max_length=255, blank=True, verbose_name=_("Название"))
 

@@ -9,6 +9,7 @@ from .models import (
     BrandSupplier,
     Contractor,
     ContractorLegalDetails,
+    ContractorLink,
     Product,
     ProductSupplier,
 )
@@ -20,6 +21,12 @@ class BrandSupplierInline(TabularInline):
     model = BrandSupplier
     extra = 1
     autocomplete_fields = ["supplier"]
+
+
+class ContractorLinkInline(TabularInline):
+    model = ContractorLink
+    extra = 1  # Одна пустая строка для новой ссылки
+    fields = ("name", "url")
 
 
 class LegalDetailsInline(StackedInline):
@@ -85,7 +92,7 @@ class ContractorAdmin(ModelAdmin):
         "dt_created",
     )
 
-    inlines = (LegalDetailsInline, SubsidiariesInline)
+    inlines = (LegalDetailsInline, SubsidiariesInline, ContractorLinkInline)
 
     fieldsets = (
         (
