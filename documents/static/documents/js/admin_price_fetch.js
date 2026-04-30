@@ -4,7 +4,6 @@ document.addEventListener("change", async (event) => {
 		const productId = productSelect.value;
 		const supplierSelect = document.getElementById("id_supplier");
 		const supplierId = supplierSelect ? supplierSelect.value : null;
-
 		const row = productSelect.closest("tr, .inline-related");
 
 		if (supplierId && productId) {
@@ -14,59 +13,46 @@ document.addEventListener("change", async (event) => {
 
 			try {
 				const response = await fetch(url);
-				if (!response.ok) throw new Error(`Server error: ${response.status}`);
-
 				const data = await response.json();
 				const isDark = document.documentElement.classList.contains("dark");
-
-				const swalConfig = {
-					toast: true,
-					position: "top-end",
-					showConfirmButton: false,
-					timer: 3000,
-					timerProgressBar: true,
-					background: isDark ? "#1f2937" : "#fff",
-					color: isDark ? "#fff" : "#000",
-				};
 
 				const priceInput = row.querySelector('input[id$="-price_0"]');
 				const currencySelect = row.querySelector('select[id$="-price_1"]');
 
-				if (data.price) {
-					if (priceInput) {
-						priceInput.value = data.price;
-						priceInput.classList.add("bg-green-100", "dark:bg-green-900/30");
-						setTimeout(() => priceInput.classList.remove("bg-green-100", "dark:bg-green-900/30"), 800);
-					}
+				// Всегда ставим то, что пришло (цену или 0)
+				if (priceInput) {
+					priceInput.value = data.price;
 
-					if (currencySelect) {
-						currencySelect.value = data.currency;
-						currencySelect.dispatchEvent(new Event("change", { bubbles: true }));
-					}
+					// Подсветка: зеленая при успехе, желтая при 0, красная при ошибке
+					const colorClass = data.status === "success" ? "bg-green-100" : data.status === "error" ? "bg-red-100" : "bg-yellow-100";
+					const darkColorClass =
+						data.status === "success" ? "dark:bg-green-900/30" : data.status === "error" ? "dark:bg-red-900/30" : "dark:bg-yellow-900/30";
 
-					Swal.fire({
-						...swalConfig,
-						icon: "success",
-						title: `Цена: ${data.price}`,
-						html: `Док. №${data.doc_number} от ${data.doc_date}`,
-					});
-				} else {
-					// Если цена не найдена — ставим 0
-					if (priceInput) {
-						priceInput.value = "0";
-						priceInput.classList.add("bg-yellow-100", "dark:bg-yellow-900/30");
-						setTimeout(() => priceInput.classList.remove("bg-yellow-100", "dark:bg-yellow-900/30"), 800);
-					}
-
-					Swal.fire({
-						...swalConfig,
-						icon: "info",
-						title: "Цена не найдена",
-						text: "Установлено значение 0",
-					});
+					priceInput.classList.add(colorClass, darkColorClass);
+					setTimeout(() => priceInput.classList.remove(colorClass, darkColorClass), 1000);
 				}
+
+				// Валюта теперь всегда UAH по твоему условию
+				if (currencySelect) {
+					currencySelect.value = "UAH";
+					currencySelect.dispatchEvent(new Event("change", { bubbles: true }));
+				}
+
+				// Выводим алерт, используя тексты с сервера
+				Swal.fire({
+					icon: data.status, // success, info, error
+					title: data.title,
+					html: data.message,
+					toast: true,
+					position: "top-end",
+					showConfirmButton: false,
+					timer: 4000,
+					timerProgressBar: true,
+					background: isDark ? "#1f2937" : "#fff",
+					color: isDark ? "#fff" : "#000",
+				});
 			} catch (error) {
-				console.error("Ошибка при загрузке цены:", error);
+				console.error("Fetch error:", error);
 			}
 		}
 	}
