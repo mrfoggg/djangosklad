@@ -177,6 +177,9 @@ class ProductSupplier(BaseModel):
         verbose_name=_("Артикул поставщика"),
         help_text=_("Как этот товар называется/кодируется в базе поставщика"),
     )
+    comment = models.CharField(
+        max_length=255, blank=True, null=True, verbose_name=_("Комментарий")
+    )
 
     class Meta:
         verbose_name = _("Поставщик товара")
@@ -218,11 +221,17 @@ class Brand(BaseModel):
         verbose_name = _("Бренд")
         verbose_name_plural = _("Бренды")
 
+    def __str__(self):
+        return f"{self.name}"
+
 
 class BrandSupplier(BaseModel):
     brand = models.ForeignKey("Brand", on_delete=models.CASCADE)
     supplier = models.ForeignKey(
         "Contractor", on_delete=models.CASCADE, limit_choices_to={"is_supplier": True}
+    )
+    comment = models.CharField(
+        max_length=255, blank=True, null=True, verbose_name=_("Комментарий")
     )
 
     class Meta:

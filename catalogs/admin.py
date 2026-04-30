@@ -4,9 +4,22 @@ from django.utils.translation import gettext_lazy as _
 from django_countries.widgets import CountrySelectWidget
 from unfold.admin import ModelAdmin, StackedInline, TabularInline
 
-from .models import Brand, Contractor, ContractorLegalDetails, Product, ProductSupplier
+from .models import (
+    Brand,
+    BrandSupplier,
+    Contractor,
+    ContractorLegalDetails,
+    Product,
+    ProductSupplier,
+)
 
 # --- ИНЛАЙНЫ (Вспомогательные модели внутри основных) ---
+
+
+class BrandSupplierInline(TabularInline):
+    model = BrandSupplier
+    extra = 1
+    autocomplete_fields = ["supplier"]
 
 
 class LegalDetailsInline(StackedInline):
@@ -170,6 +183,37 @@ class BrandAdminForm(forms.ModelForm):
         model = Brand
         fields = "__all__"
         widgets = {
+            # Этот виджет как раз и рисует флаги в выпадающем списке
             "origin_country": CountrySelectWidget(),
             "production_country": CountrySelectWidget(),
         }
+
+
+@admin.register(Brand)
+class BrandAdmin(ModelAdmin):
+    form = BrandAdminForm
+    inlines = [BrandSupplierInline]
+    search_fields = ("name",)
+
+    # Исключаем оригинальное поле suppliers из формы,
+    # так как мы управляем им через BrandSupplierInline
+    exclude = ("suppliers",)
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "main_supplier":
+            object_id = request.resolver_match.kwargs.get("object_id")
+            if object_id:
+                # Показываем только тех, кто реально привязан к этому бренду
+                kwargs["queryset"] = BrandSupplier.objects.filter(brand_id=object_id)
+            else:
+                kwargs["queryset"] = BrandSupplier.objects.none()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+
+@admin.register(BrandSupplier)
+class BrandSupplierAdmin(ModelAdmin):
+    """Отдельный список связей (если нужно править артикулы массово)"""
+
+    list_display = ("brand", "supplier")
+    search_fields = ("brand__name", "supplier__last_name")
+    autocomplete_fields = ("supplier", "brand")
