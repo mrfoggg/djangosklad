@@ -77,6 +77,27 @@ class Contractor(BaseModel):
         # Для обычного физлица
         return f"{self.last_name} {self.first_name} {self.middle_name}".strip()
 
+    def clean(self):
+        super().clean()
+
+        # Если контрагент сам является холдингом (HLD)
+        if self.legal_type == self.LegalType.HOLDING:
+            # И при этом у него заполнен родительский холдинг
+            if self.parent_holding:
+                raise ValidationError(
+                    {
+                        "parent_holding": _(
+                            "Холдинг не может входить в другой холдинг. "
+                            "Сначала измените тип контрагента или уберите родителя."
+                        )
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        # Запускаем валидацию перед сохранением
+        self.full_clean()
+        super().save(*args, **kwargs)
+
 
 class ContractorLegalDetails(models.Model):
     contractor = models.OneToOneField(

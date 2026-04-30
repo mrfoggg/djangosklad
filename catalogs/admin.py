@@ -110,6 +110,13 @@ class ContractorAdmin(ModelAdmin):
 
     readonly_fields = ("dt_created", "dt_updated")
 
+    conditional_fields = {
+        # Скрываем родителя для самих холдингов
+        "parent_holding": "legal_type !== 'HLD'",
+        # Показываем тип собственности (ООО, ЗАО) только для организаций
+        "ownership_type": "legal_type === 'OTH'",
+    }
+
     @admin.display(description=_("Полное наименование"))
     def get_full_name(self, obj):
         return str(obj)
