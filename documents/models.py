@@ -127,6 +127,7 @@ class PurchaseOrder(BaseDocumentModel):
 class PurchaseOrderItem(models.Model):
     """
     Позиция в заказе поставщику.
+    Всегда в UAH.
     """
 
     document = models.ForeignKey(
@@ -141,12 +142,12 @@ class PurchaseOrderItem(models.Model):
     quantity = models.DecimalField(
         _("Количество"), max_digits=10, decimal_places=3, default=1
     )
-    price = MoneyField(
+    # Заменяем MoneyField на обычный Decimal
+    price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
-        default_currency="UAH",
-        currency_choices=AVAILABLE_CURRENCIES,
-        verbose_name=_("Цена за ед."),
+        default=0,
+        verbose_name=_("Цена за ед. (UAH)"),
     )
 
     class Meta:
@@ -155,10 +156,11 @@ class PurchaseOrderItem(models.Model):
 
     @property
     def total_amount(self):
-        return self.price * self.quantity
+        # Теперь это простое умножение Decimal на Decimal
+        return round(self.price * self.quantity, 2)
 
     def __str__(self):
-        return f"{self.product} ({self.quantity} шт.)"
+        return f"{self.product} ({self.quantity})"
 
 
 class SalesOrder(BaseDocumentModel):
