@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
 
@@ -30,13 +31,34 @@ class BaseDocumentModel(models.Model):
         verbose_name=_("Помечен на удаление"), default=False, db_index=True
     )
 
+    def save(self, *args, **kwargs):
+        # Если флаг "Проведен" установлен, а дата проведения еще не задана
+        if self.is_applied and not self.dt_applied:
+            self.dt_applied = timezone.now()
+        # Опционально: если сняли флаг проведения, можно очищать дату
+        elif not self.is_applied and self.dt_applied:
+            self.dt_applied = None
+
+        super().save(*args, **kwargs)
+
     class Meta:
         abstract = True
         ordering = ["-dt_created"]
 
     def __str__(self):
-        status = _("Проведен") if self.is_applied else _("Черновик")
-        return f"{self._meta.verbose_name} №{self.id} ({status})"
+        # Форматируем даты заранее для удобства
+        created_str = self.dt_created.strftime("%d.%m.%Y")
+
+        if self.is_applied:
+            # Если дата проведения по какой-то причине пуста (редкий случай),
+            # подстрахуемся и выведем хотя бы дату создания
+            applied_str = (
+                self.dt_applied.strftime("%d.%m.%Y") if self.dt_applied else created_str
+            )
+            return f"{self._meta.verbose_name} №{self.id} (Проведен {applied_str})"
+
+        # Если не проведен — выводим статус Черновик и дату создания
+        return f"{self._meta.verbose_name} №{self.id} от {created_str} (Черновик)"
 
 
 # Набор доступных валют

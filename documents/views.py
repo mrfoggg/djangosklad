@@ -13,17 +13,17 @@ def get_latest_price_ajax(request):
 
     supplier_id = request.GET.get("supplier_id")
     product_id = request.GET.get("product_id")
-    print(supplier_id, product_id)
+    print(f"Supplier: {supplier_id}, Product: {product_id}")
 
     if not supplier_id or not product_id:
         return JsonResponse({"error": "Missing parameters"}, status=400)
 
-    # Ищем только в примененных и НЕ помеченных на удаление прайсах
+    # Ищем в проведенных прайсах, исключая помеченные на удаление
     item = (
         SupplierPriceItem.objects.filter(
             document__supplier_id=supplier_id,
-            document__is_applied=True,  # Только проведенные
-            document__to_remove=False,  # Исключаем "корзину"
+            document__is_applied=True,
+            document__to_remove=False,
             product_id=product_id,
         )
         .select_related("document")
@@ -31,11 +31,19 @@ def get_latest_price_ajax(request):
         .first()
     )
 
-    print("item: ", item)
+    print("item found:", item)
 
     if item and item.price:
+        # Формируем дату: если dt_applied вдруг None, берем дату создания
+        doc_date = item.document.dt_applied or item.document.dt_created
+
         return JsonResponse(
-            {"price": str(item.price.amount), "currency": item.price.currency.code}
+            {
+                "price": str(item.price.amount),
+                "currency": item.price.currency.code,
+                "doc_number": item.document.id,
+                "doc_date": doc_date.strftime("%d.%m.%Y"),
+            }
         )
 
     return JsonResponse({"price": None})

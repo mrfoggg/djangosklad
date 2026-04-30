@@ -96,4 +96,7 @@ class PurchaseOrderAdmin(ModelAdmin):
 
     class Media:
         # Путь к файлу относительно папки static
-        js = ["documents/js/admin_price_fetch.js"]
+        js = [
+            "https://cdn.jsdelivr.net/npm/sweetalert2@11",
+            "documents/js/admin_price_fetch.js",
+        ]
