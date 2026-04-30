@@ -85,7 +85,7 @@ class ContractorAdmin(ModelAdmin):
         "dt_created",
     )
 
-    inlines = [LegalDetailsInline, SubsidiariesInline]
+    inlines = (LegalDetailsInline, SubsidiariesInline)
 
     fieldsets = (
         (
@@ -97,6 +97,14 @@ class ContractorAdmin(ModelAdmin):
                     "parent_holding",
                     ("last_name", "first_name", "middle_name"),
                 )
+            },
+        ),
+        (
+            _("Настройки поставщика"),
+            {
+                "fields": (("use_usd_prices", "usd_rate"),),
+                # Эта секция будет видна всегда, но поля внутри
+                # скроются благодаря твоим conditional_fields
             },
         ),
         (
@@ -119,6 +127,10 @@ class ContractorAdmin(ModelAdmin):
         "parent_holding": "legal_type !== 'HLD'",
         # Показываем тип собственности (ООО, ЗАО) только для организаций
         "ownership_type": "legal_type === 'OTH'",
+        # Поле "Цены в USD" показываем только поставщикам
+        "use_usd_prices": "is_supplier === true",
+        # А поле курса показываем только если это поставщик И он использует USD-прайсы
+        "usd_rate": "is_supplier === true && use_usd_prices === true",
     }
 
     @admin.display(description=_("Полное наименование"))

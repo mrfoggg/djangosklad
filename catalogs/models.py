@@ -1,4 +1,7 @@
+from decimal import Decimal
+
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django_countries.fields import CountryField
@@ -58,6 +61,24 @@ class Contractor(BaseModel):
         # Теперь родителем может быть только тот, у кого тип "Холдинг"
         limit_choices_to={"legal_type": "HLD"},
         verbose_name=_("Входит в холдинг"),
+    )
+
+    use_usd_prices = models.BooleanField(
+        default=False,
+        verbose_name=_("Цены в USD"),
+        help_text=_(
+            "Если включено, цены в прайсах этого поставщика будут автоматически конвертироваться в UAH по указанному курсу"
+        ),
+    )
+
+    usd_rate = models.DecimalField(
+        max_length=10,
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal("1.00"),
+        validators=[MinValueValidator(Decimal("0.01"))],
+        verbose_name=_("Курс доллара (USD/UAH)"),
+        help_text=_("Личный курс поставщика для конвертации цен в прайсах"),
     )
     comment = models.TextField(blank=True, verbose_name=_("Комментарий"))
 
