@@ -159,3 +159,55 @@ class PurchaseOrderItem(models.Model):
 
     def __str__(self):
         return f"{self.product} ({self.quantity} шт.)"
+
+
+class SalesOrder(BaseDocumentModel):
+    STATUS_CHOICES = [
+        ("new", _("Новый")),
+        ("confirmed", _("Подтвержден")),
+        ("done", _("Выполнен")),
+        ("canceled", _("Отменен")),
+    ]
+
+    # Используем существующую модель Contractor
+    customer = models.ForeignKey(
+        "catalogs.Contractor",
+        on_delete=models.PROTECT,
+        related_name="sales_orders",
+        # Добавляем фильтрацию: выбираем только тех, кто помечен как покупатель
+        limit_choices_to={"is_customer": True},
+        verbose_name=_("Покупатель"),
+    )
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default="new", verbose_name=_("Статус")
+    )
+    comment = models.TextField(blank=True, null=True, verbose_name=_("Комментарий"))
+
+    class Meta:
+        verbose_name = _("Заказ покупателя")
+        verbose_name_plural = _("Заказы покупателей")
+        ordering = ["-dt_created"]
+
+    def __str__(self):
+        # Используем метод или атрибут имени у Contractor (например, name или last_name)
+        return f"{_('Заказ')} №{self.id} - {self.customer}"
+
+
+class SalesOrderItem(models.Model):
+    document = models.ForeignKey(
+        SalesOrder, related_name="items", on_delete=models.CASCADE
+    )
+    product = models.ForeignKey(
+        "catalogs.Product",
+        on_delete=models.PROTECT,
+        verbose_name=_("Товар"),
+    )
+    quantity = models.PositiveIntegerField(default=1, verbose_name=_("Кол-во"))
+    # Используем MoneyField или DecimalField для цены продажи
+    price = models.DecimalField(
+        max_digits=10, decimal_places=2, verbose_name=_("Цена продажи")
+    )
+
+    class Meta:
+        verbose_name = _("Товар в заказе")
+        verbose_name_plural = _("Товары в заказе")

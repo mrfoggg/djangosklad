@@ -7,6 +7,8 @@ from unfold.widgets import UnfoldAdminMoneyWidget
 from .models import (
     PurchaseOrder,
     PurchaseOrderItem,
+    SalesOrder,
+    SalesOrderItem,
     SupplierPriceItem,
     SupplierPriceList,
 )
@@ -100,3 +102,18 @@ class PurchaseOrderAdmin(ModelAdmin):
             "https://cdn.jsdelivr.net/npm/sweetalert2@11",
             "documents/js/admin_price_fetch.js",
         ]
+
+
+class SalesOrderItemInline(TabularInline):
+    model = SalesOrderItem
+    extra = 1
+    # Здесь можно будет потом добавить AJAX для подтягивания розничной цены
+    tab = True
+
+
+@admin.register(SalesOrder)
+class SalesOrderAdmin(ModelAdmin):
+    list_display = ["id", "customer", "status", "dt_created", "is_applied"]
+    list_filter = ["status", "is_applied"]
+    search_fields = ["customer", "id"]
+    inlines = [SalesOrderItemInline]
