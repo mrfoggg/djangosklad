@@ -46,7 +46,9 @@ def get_latest_price_ajax(request):
             "%d.%m.%Y"
         )
 
-        # Логика конвертации
+        # Подготавливаем детали для сообщения
+        details = ""
+
         if source_currency == "USD":
             rate = getattr(supplier, "usd_rate", None)
 
@@ -62,25 +64,23 @@ def get_latest_price_ajax(request):
                 )
 
             target_price = source_price * rate
-
-            # Формируем сообщение с деталями конвертации
-            message = _(
-                "<strong>%(target)s грн</strong> (%(src_p)s %(src_c)s по курсу %(r)s)<br>"
-                "Прайс №%(num)s от %(date)s"
-            ) % {
-                "target": round(target_price, 2),
+            # Добавляем инфо о конвертации в скобки
+            details = _(" (%(src_p)s %(src_c)s по курсу %(r)s)") % {
                 "src_p": round(source_price, 2),
                 "src_c": source_currency,
                 "r": rate,
-                "num": item.document.id,
-                "date": doc_date,
             }
-        else:
-            # Если уже в гривне
-            message = _("Прайс №%(num)s от %(date)s") % {
-                "num": item.document.id,
-                "date": doc_date,
-            }
+
+        # Формируем единый формат сообщения
+        # <strong>Цена грн</strong> (детали если есть)<br>Прайс №...
+        message = _(
+            "<strong>%(target)s грн</strong>%(details)s<br>Прайс №%(num)s от %(date)s"
+        ) % {
+            "target": round(target_price, 2),
+            "details": details,
+            "num": item.document.id,
+            "date": doc_date,
+        }
 
         response_data.update(
             {
