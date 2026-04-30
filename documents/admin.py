@@ -4,7 +4,12 @@ from djmoney.models.fields import MoneyField
 from unfold.admin import ModelAdmin, TabularInline
 from unfold.widgets import UnfoldAdminMoneyWidget
 
-from .models import SupplierPriceItem, SupplierPriceList
+from .models import (
+    PurchaseOrder,
+    PurchaseOrderItem,
+    SupplierPriceItem,
+    SupplierPriceList,
+)
 
 
 class SupplierPriceItemInline(TabularInline):
@@ -48,3 +53,47 @@ class SupplierPriceListAdmin(ModelAdmin):
     )
 
     readonly_fields = ("id", "dt_created", "dt_updated", "dt_applied")
+
+
+class PurchaseOrderItemInline(TabularInline):
+    model = PurchaseOrderItem
+    extra = 1
+    formfield_overrides = {
+        MoneyField: {"widget": UnfoldAdminMoneyWidget},
+    }
+    # Добавляем количество и цену
+    fields = ("product", "quantity", "price")
+
+
+@admin.register(PurchaseOrder)
+class PurchaseOrderAdmin(ModelAdmin):
+    list_display = ("id", "supplier", "dt_created", "is_applied")
+    list_filter = ("is_applied", "supplier")
+    readonly_fields = ("id", "dt_created", "dt_updated", "dt_applied")
+
+    inlines = [PurchaseOrderItemInline]
+
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": (
+                    "id",
+                    "supplier",
+                    "is_applied",
+                    "comment",
+                )
+            },
+        ),
+        (
+            "Даты",
+            {
+                "fields": ("dt_created", "dt_updated", "dt_applied"),
+                "classes": ("collapse",),
+            },
+        ),
+    )
+
+    class Media:
+        # Путь к файлу относительно папки static
+        js = ["documents/js/admin_price_fetch.js"]

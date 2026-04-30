@@ -143,6 +143,18 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 
+# Список кодов валют, которые будут доступны в проекте
+CURRENCIES = ("UAH", "USD")
+
+# Отображение имен валют в выпадающих списках
+CURRENCY_CHOICES = [
+    ("UAH", "UAH"),
+    ("USD", "USD"),
+]
+
+# Валюта по умолчанию
+DEFAULT_CURRENCY = "UAH"
+
 UNFOLD = {
     "SHOW_LANGUAGES": True,
 }

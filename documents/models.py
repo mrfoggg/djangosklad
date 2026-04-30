@@ -81,3 +81,59 @@ class SupplierPriceItem(models.Model):
     class Meta:
         verbose_name = _("Позиция прайса")
         verbose_name_plural = _("Позиции прайса")
+
+
+class PurchaseOrder(BaseDocumentModel):
+    """
+    Документ: Заказ поставщику.
+    """
+
+    supplier = models.ForeignKey(
+        "catalogs.Contractor",
+        on_delete=models.CASCADE,
+        limit_choices_to={"is_supplier": True},
+        verbose_name=_("Поставщик"),
+        related_name="purchase_orders",
+    )
+    comment = models.TextField(_("Комментарий"), blank=True)
+
+    class Meta(BaseDocumentModel.Meta):
+        verbose_name = _("Заказ поставщику")
+        verbose_name_plural = _("Заказы поставщикам")
+
+
+class PurchaseOrderItem(models.Model):
+    """
+    Позиция в заказе поставщику.
+    """
+
+    document = models.ForeignKey(
+        PurchaseOrder,
+        on_delete=models.CASCADE,
+        related_name="items",
+        verbose_name=_("Документ"),
+    )
+    product = models.ForeignKey(
+        "catalogs.Product", on_delete=models.PROTECT, verbose_name=_("Товар")
+    )
+    quantity = models.DecimalField(
+        _("Количество"), max_digits=10, decimal_places=3, default=1
+    )
+    price = MoneyField(
+        max_digits=12,
+        decimal_places=2,
+        default_currency="UAH",
+        currency_choices=AVAILABLE_CURRENCIES,
+        verbose_name=_("Цена за ед."),
+    )
+
+    class Meta:
+        verbose_name = _("Позиция заказа")
+        verbose_name_plural = _("Позиции заказа")
+
+    @property
+    def total_amount(self):
+        return self.price * self.quantity
+
+    def __str__(self):
+        return f"{self.product} ({self.quantity} шт.)"
