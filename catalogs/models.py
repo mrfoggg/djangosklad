@@ -132,8 +132,6 @@ class ContractorLegalDetails(models.Model):
         max_length=20, blank=True, verbose_name=_("ИНН / ЕГРПОУ"), db_index=True
     )
 
-    iban = models.CharField(max_length=34, blank=True, verbose_name=_("IBAN"))
-
     legal_address = models.TextField(blank=True, verbose_name=_("Юридический адрес"))
 
     class Meta:
@@ -349,7 +347,7 @@ class Settlement(models.Model):
         ordering = ["name"]
 
     def __str__(self):
-        return f"{self.settlement_type} {self.name} ({self.country.name})"
+        return f"{self.settlement_type}. {self.name} ({self.country.name})"
 
 
 class Warehouse(models.Model):

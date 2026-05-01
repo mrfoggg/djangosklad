@@ -12,7 +12,9 @@ from .models import (
     ContractorLink,
     Product,
     ProductSupplier,
+    Settlement,
     SettlementType,
+    Warehouse,
 )
 
 # --- ИНЛАЙНЫ (Вспомогательные модели внутри основных) ---
@@ -35,7 +37,7 @@ class LegalDetailsInline(StackedInline):
     can_delete = False
     verbose_name = _("Юридические реквизиты")
     verbose_name_plural = _("Юридические реквизиты")
-    fieldsets = ((None, {"fields": (("inn", "iban"), "legal_address")}),)
+    fieldsets = ((None, {"fields": ("inn", "legal_address")}),)
 
 
 class ProductSupplierInline(TabularInline):
@@ -254,3 +256,17 @@ class BrandSupplierAdmin(ModelAdmin):
 class SettlementTypeAdmin(ModelAdmin):
     list_display = ("name",)
     search_fields = ("name",)
+
+
+@admin.register(Settlement)
+class SettlementAdmin(ModelAdmin):
+    list_display = ("__str__", "country", "region")
+    search_fields = ("name",)
+
+
+@admin.register(Warehouse)
+class WarehouseAdmin(ModelAdmin):
+    # Используем названия полей именно из твоего последнего куска кода
+    list_display = ["name", "settlement", "is_virtual"]
+    list_filter = ["is_virtual", "settlement"]
+    search_fields = ["name"]
