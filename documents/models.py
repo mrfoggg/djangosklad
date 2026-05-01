@@ -62,7 +62,7 @@ class BaseDocumentModel(models.Model):
 
 
 # Набор доступных валют
-AVAILABLE_CURRENCIES = [("UAH", "UAH"), ("USD", "USD")]
+# AVAILABLE_CURRENCIES = [("UAH", "UAH"), ("USD", "USD")]
 
 
 class SupplierPriceList(BaseDocumentModel):
@@ -95,8 +95,8 @@ class SupplierPriceItem(models.Model):
     price = MoneyField(
         max_digits=12,
         decimal_places=2,
-        default_currency="UAH",
-        currency_choices=AVAILABLE_CURRENCIES,
+        # default_currency="UAH",
+        # currency_choices=AVAILABLE_CURRENCIES,
         verbose_name=_("Цена"),
     )
 

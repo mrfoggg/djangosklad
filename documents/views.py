@@ -33,7 +33,7 @@ def get_latest_price_ajax(request):
         "currency": "UAH",
         "status": "info",
         "title": _("Цена не найдена"),
-        "message": _("Нет проведенных документов. Установлено значение 0."),
+        "message": _("Нет проведенных прайсов. Установлено значение 0."),
     }
 
     if item and item.price:

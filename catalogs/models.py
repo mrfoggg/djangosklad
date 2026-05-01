@@ -304,3 +304,89 @@ class BrandSupplier(BaseModel):
 
     def __str__(self):
         return f"{self.supplier}"  # В списке выбора будет видно имя поставщика
+
+
+# --- ГЕОГРАФИЯ ---
+
+
+class SettlementType(models.Model):
+    """Тип населенного пункта (г., с., пгт)"""
+
+    name = models.CharField(max_length=50, verbose_name=_("Название типа"))
+    short_name = models.CharField(max_length=10, verbose_name=_("Сокращение"))
+
+    class Meta:
+        verbose_name = _("Тип населенного пункта")
+        verbose_name_plural = _("Типы населенных пунктов")
+
+    def __str__(self):
+        return self.short_name
+
+
+class Settlement(models.Model):
+    """Населенный пункт с привязкой к стране и UUID Новой Почты"""
+
+    name = models.CharField(max_length=255, verbose_name=_("Название"))
+    settlement_type = models.ForeignKey(
+        SettlementType,
+        on_delete=models.PROTECT,
+        related_name="settlements",
+        verbose_name=_("Тип"),
+    )
+    country = CountryField(default="UA", verbose_name=_("Страна"))
+    region = models.CharField(
+        max_length=255, blank=True, verbose_name=_("Область/Район")
+    )
+
+    # Идентификатор для интеграции (например, Ref из Новой Почты)
+    ref_uuid = models.UUIDField(
+        null=True, blank=True, unique=True, verbose_name=_("UUID Новой Почты")
+    )
+
+    class Meta:
+        verbose_name = _("Населенный пункт")
+        verbose_name_plural = _("Населенные пункты")
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.settlement_type} {self.name} ({self.country.name})"
+
+
+class Warehouse(models.Model):
+    """Складская точка (физическая или виртуальная)"""
+
+    name = models.CharField(max_length=255, verbose_name=_("Название склада"))
+
+    # Делаем null=True, чтобы база позволяла пустые значения для виртуальных складов
+    settlement = models.ForeignKey(
+        Settlement,
+        on_delete=models.PROTECT,
+        related_name="warehouses",
+        verbose_name=_("Населенный пункт"),
+        null=True,
+        blank=True,
+    )
+    address = models.CharField(max_length=255, blank=True, verbose_name=_("Адрес"))
+
+    is_virtual = models.BooleanField(
+        default=False,
+        verbose_name=_("Виртуальный склад"),
+        help_text=_("Используется для дропшиппинга или учета остатков поставщика"),
+    )
+
+    class Meta:
+        verbose_name = _("Склад")
+        verbose_name_plural = _("Склады")
+
+    def __str__(self):
+        location = self.settlement if self.settlement else _("Без привязки к городу")
+        virtual_tag = f" [{_('Виртуальный')}]" if self.is_virtual else ""
+        return f"{self.name} ({location}){virtual_tag}"
+
+    def clean(self):
+        """Валидация обязательности города для реальных складов"""
+        super().clean()
+        if not self.is_virtual and not self.settlement:
+            raise ValidationError(
+                {"settlement": _("Населенный пункт обязателен для физического склада.")}
+            )

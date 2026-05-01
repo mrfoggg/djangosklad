@@ -12,6 +12,7 @@ from .models import (
     ContractorLink,
     Product,
     ProductSupplier,
+    SettlementType,
 )
 
 # --- ИНЛАЙНЫ (Вспомогательные модели внутри основных) ---
@@ -247,3 +248,9 @@ class BrandSupplierAdmin(ModelAdmin):
     list_display = ("brand", "supplier")
     search_fields = ("brand__name", "supplier__last_name")
     autocomplete_fields = ("supplier", "brand")
+
+
+@admin.register(SettlementType)
+class SettlementTypeAdmin(ModelAdmin):
+    list_display = ("name",)
+    search_fields = ("name",)
