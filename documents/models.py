@@ -156,7 +156,27 @@ class CustomerOrder(BaseDocumentModel):
 class OrderItem(models.Model):
     """Строка товара, универсальная для закупок и продаж. Позволяет реализовать механим резервирования"""
 
-    # СВЯЗИ С ЗАКАЗАМИ
+    product = models.ForeignKey(
+        "catalogs.Product",
+        on_delete=models.PROTECT,
+        related_name="order_items",
+        verbose_name=_("Товар"),
+    )
+    # КОЛИЧЕСТВО И ЦЕНА
+    price = models.DecimalField(
+        max_digits=10, decimal_places=2, verbose_name=_("Цена за единицу")
+    )
+    quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, verbose_name=_("Количество")
+    )
+    # ВЫЧИСЛЯЕМОЕ ПОЛЕ
+    total_price = models.GeneratedField(
+        expression=F("quantity") * F("price"),
+        output_field=models.DecimalField(max_digits=10, decimal_places=2),
+        db_persist=True,
+        verbose_name=_("Сумма"),
+    )
+    # СВЯЗИ С ЗАКАЗАМИ И СКЛАДОМ
     purchase_order = models.ForeignKey(
         "PurchaseOrder",
         on_delete=models.CASCADE,
@@ -173,14 +193,6 @@ class OrderItem(models.Model):
         blank=True,
         verbose_name=_("Заказ покупателя"),
     )
-
-    # ТОВАР И СКЛАД
-    product = models.ForeignKey(
-        "catalogs.Product",
-        on_delete=models.PROTECT,
-        related_name="order_items",
-        verbose_name=_("Товар"),
-    )
     warehouse = models.ForeignKey(
         "catalogs.Warehouse",
         on_delete=models.PROTECT,
@@ -189,28 +201,12 @@ class OrderItem(models.Model):
         help_text=_("Склад отгрузки или приемки для этой строки"),
     )
 
-    # КОЛИЧЕСТВО И ЦЕНА
-    quantity = models.DecimalField(
-        max_digits=10, decimal_places=2, verbose_name=_("Количество")
-    )
-    price = models.DecimalField(
-        max_digits=10, decimal_places=2, verbose_name=_("Цена за единицу")
-    )
-
-    # ВЫЧИСЛЯЕМОЕ ПОЛЕ
-    total_price = models.GeneratedField(
-        expression=F("quantity") * F("price"),
-        output_field=models.DecimalField(max_digits=10, decimal_places=2),
-        db_persist=True,
-        verbose_name=_("Сумма"),
-    )
-
     # СОРТИРОВКА
     sort_order_purchase = models.PositiveIntegerField(
-        default=0, verbose_name=_("Порядок в закупке")
+        default=0, verbose_name=_("Порядок в закупке"), db_index=True
     )
     sort_order_customer = models.PositiveIntegerField(
-        default=0, verbose_name=_("Порядок в продаже")
+        default=0, verbose_name=_("Порядок в продаже"), db_index=True
     )
 
     class Meta:

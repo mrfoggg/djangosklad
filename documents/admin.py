@@ -26,6 +26,8 @@ class SupplierPriceItemInline(TabularInline):
 
 class PurchaseOrderItemInline(TabularInline):
     model = OrderItem
+    ordering_field = "sort_order_purchase"
+    # hide_ordering_field = True
     extra = 1
     fields = (
         "sort_order_purchase",
@@ -41,9 +43,17 @@ class PurchaseOrderItemInline(TabularInline):
 
 class CustomeOrderItemInline(TabularInline):
     model = OrderItem
-    extra = 1
+    ordering_field = "sort_order_customer"
+    hide_ordering_field = True
+
+    # КЛЮЧЕВОЙ МОМЕНТ:
+    # Используем list_display для активации JS и вывода иконки
+    list_display = ("sort_order_customer", "product", "price")
+
+    # В fields указываем порядок, НО поле сортировки НЕ добавляем туда как обычную строку
+    # Мы добавим его в readonly_fields или воспользуемся тем, что Unfold
+    # сам должен его подтянуть, если оно указано в ordering_field.
     fields = (
-        "sort_order_customer",
         "product",
         "price",
         "quantity",
@@ -52,6 +62,9 @@ class CustomeOrderItemInline(TabularInline):
         "warehouse",
     )
     readonly_fields = ("total_price",)
+
+    # Если после этого ошибка "input is null" осталась, добавь поле в readonly_fields:
+    readonly_fields = ("total_price", "sort_order_customer")
 
 
 @admin.register(SupplierPriceList)
