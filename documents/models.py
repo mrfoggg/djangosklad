@@ -62,10 +62,6 @@ class BaseDocumentModel(models.Model):
         return f"{self._meta.verbose_name} №{self.id} от {created_str} (Черновик)"
 
 
-# Набор доступных валют
-# AVAILABLE_CURRENCIES = [("UAH", "UAH"), ("USD", "USD")]
-
-
 class SupplierPriceList(BaseDocumentModel):
     supplier = models.ForeignKey(
         "catalogs.Contractor",  # Ссылка на Contractor в catalogs
@@ -124,44 +120,6 @@ class PurchaseOrder(BaseDocumentModel):
         verbose_name = _("Заказ поставщику")
         verbose_name_plural = _("Заказы поставщикам")
 
-    # class PurchaseOrderItem(models.Model):
-    #     """
-    #     Позиция в заказе поставщику.
-    #     Всегда в UAH.
-    #     """
-
-    #     document = models.ForeignKey(
-    #         PurchaseOrder,
-    #         on_delete=models.CASCADE,
-    #         related_name="items",
-    #         verbose_name=_("Документ"),
-    #     )
-    #     product = models.ForeignKey(
-    #         "catalogs.Product", on_delete=models.PROTECT, verbose_name=_("Товар")
-    #     )
-    #     quantity = models.DecimalField(
-    #         _("Количество"), max_digits=10, decimal_places=3, default=1
-    #     )
-    #     # Заменяем MoneyField на обычный Decimal
-    #     price = models.DecimalField(
-    #         max_digits=12,
-    #         decimal_places=2,
-    #         default=0,
-    #         verbose_name=_("Цена за ед. (UAH)"),
-    #     )
-
-    #     class Meta:
-    #         verbose_name = _("Позиция заказа")
-    #         verbose_name_plural = _("Позиции заказа")
-
-    # @property
-    # def total_amount(self):
-    #     # Теперь это простое умножение Decimal на Decimal
-    #     return round(self.price * self.quantity, 2)
-
-    # def __str__(self):
-    #     return f"{self.product} ({self.quantity})"
-
 
 class CustomerOrder(BaseDocumentModel):
     STATUS_CHOICES = [
@@ -193,26 +151,6 @@ class CustomerOrder(BaseDocumentModel):
     def __str__(self):
         # Используем метод или атрибут имени у Contractor (например, name или last_name)
         return f"{_('Заказ')} №{self.id} - {self.customer}"
-
-
-# class CustomerOrderItem(models.Model):
-#     document = models.ForeignKey(
-#         CustomerOrder, related_name="items", on_delete=models.CASCADE
-#     )
-#     product = models.ForeignKey(
-#         "catalogs.Product",
-#         on_delete=models.PROTECT,
-#         verbose_name=_("Товар"),
-#     )
-#     quantity = models.PositiveIntegerField(default=1, verbose_name=_("Кол-во"))
-#     # Используем MoneyField или DecimalField для цены продажи
-#     price = models.DecimalField(
-#         max_digits=10, decimal_places=2, verbose_name=_("Цена продажи")
-#     )
-
-#     class Meta:
-#         verbose_name = _("Товар в заказе")
-#         verbose_name_plural = _("Товары в заказе")
 
 
 class OrderItem(models.Model):

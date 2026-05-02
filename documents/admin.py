@@ -6,9 +6,8 @@ from unfold.widgets import UnfoldAdminMoneyWidget
 
 from .models import (
     CustomerOrder,
-    # CustomerOrderItem,
+    OrderItem,
     PurchaseOrder,
-    # PurchaseOrderItem,
     SupplierPriceItem,
     SupplierPriceList,
 )
@@ -23,6 +22,36 @@ class SupplierPriceItemInline(TabularInline):
     formfield_overrides = {
         MoneyField: {"widget": UnfoldAdminMoneyWidget},
     }
+
+
+class PurchaseOrderItemInline(TabularInline):
+    model = OrderItem
+    extra = 1
+    fields = (
+        "sort_order_purchase",
+        "product",
+        "price",
+        "quantity",
+        "total_price",
+        "customer_order",
+        "warehouse",
+    )
+    readonly_fields = ("total_price",)
+
+
+class CustomeOrderItemInline(TabularInline):
+    model = OrderItem
+    extra = 1
+    fields = (
+        "sort_order_customer",
+        "product",
+        "price",
+        "quantity",
+        "total_price",
+        "purchase_order",
+        "warehouse",
+    )
+    readonly_fields = ("total_price",)
 
 
 @admin.register(SupplierPriceList)
@@ -57,23 +86,13 @@ class SupplierPriceListAdmin(ModelAdmin):
     readonly_fields = ("id", "dt_created", "dt_updated", "dt_applied")
 
 
-# class PurchaseOrderItemInline(TabularInline):
-#     model = PurchaseOrderItem
-#     extra = 1
-#     formfield_overrides = {
-#         MoneyField: {"widget": UnfoldAdminMoneyWidget},
-#     }
-#     # Добавляем количество и цену
-#     fields = ("product", "quantity", "price")
-
-
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(ModelAdmin):
     list_display = ("id", "supplier", "dt_created", "is_applied")
     list_filter = ("is_applied", "supplier")
     readonly_fields = ("id", "dt_created", "dt_updated", "dt_applied")
 
-    # inlines = [PurchaseOrderItemInline]
+    inlines = [PurchaseOrderItemInline]
 
     fieldsets = (
         (
@@ -112,8 +131,8 @@ class PurchaseOrderAdmin(ModelAdmin):
 
 
 @admin.register(CustomerOrder)
-class SalesOrderAdmin(ModelAdmin):
+class CusromerOrderAdmin(ModelAdmin):
     list_display = ["id", "customer", "status", "dt_created", "is_applied"]
     list_filter = ["status", "is_applied"]
     search_fields = ["customer", "id"]
-    # inlines = [SalesOrderItemInline]
+    inlines = [CustomeOrderItemInline]
