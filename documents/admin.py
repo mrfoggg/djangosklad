@@ -1,3 +1,4 @@
+from django import forms
 from django.contrib import admin
 from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
@@ -24,13 +25,45 @@ class SupplierPriceItemInline(TabularInline):
     }
 
 
+class OrderItemInlineForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and self.instance.pk:
+            purchase_applied = (
+                self.instance.purchase_order and self.instance.purchase_order.is_applied
+            )
+            customer_applied = (
+                self.instance.customer_order and self.instance.customer_order.is_applied
+            )
+
+            if purchase_applied or customer_applied:
+                for name, field in self.fields.items():
+                    field.disabled = True
+
+    def clean(self):
+        # Дополнительная защита: запрещаем удаление, если связаны проведенные доки
+        if self.instance and self.instance.pk:
+            if (
+                self.instance.purchase_order and self.instance.purchase_order.is_applied
+            ) or (
+                self.instance.customer_order and self.instance.customer_order.is_applied
+            ):
+                if self.cleaned_data.get("DELETE"):
+                    raise forms.ValidationError(
+                        "Нельзя удалить строку, связанную с проведенным документом"
+                    )
+        return super().clean()
+
+
 class PurchaseOrderItemInline(TabularInline):
     model = OrderItem
+    form = OrderItemInlineForm
     ordering_field = "sort_order_purchase"
-    # hide_ordering_field = True
-    extra = 1
+    hide_ordering_field = True
+    extra = 0
+    # tab = True
     fields = (
-        "sort_order_purchase",
+        # "sort_order_purchase",
         "product",
         "price",
         "quantity",
@@ -43,8 +76,10 @@ class PurchaseOrderItemInline(TabularInline):
 
 class CustomeOrderItemInline(TabularInline):
     model = OrderItem
+    form = OrderItemInlineForm
     ordering_field = "sort_order_customer"
     hide_ordering_field = True
+    extra = 0
 
     # КЛЮЧЕВОЙ МОМЕНТ:
     # Используем list_display для активации JS и вывода иконки
@@ -53,18 +88,18 @@ class CustomeOrderItemInline(TabularInline):
     # В fields указываем порядок, НО поле сортировки НЕ добавляем туда как обычную строку
     # Мы добавим его в readonly_fields или воспользуемся тем, что Unfold
     # сам должен его подтянуть, если оно указано в ordering_field.
-    fields = (
-        "product",
-        "price",
-        "quantity",
-        "total_price",
-        "purchase_order",
-        "warehouse",
-    )
+    # fields = (
+    #     "product",
+    #     "price",
+    #     "quantity",
+    #     "total_price",
+    #     "purchase_order",
+    #     "warehouse",
+    # )
     readonly_fields = ("total_price",)
 
     # Если после этого ошибка "input is null" осталась, добавь поле в readonly_fields:
-    readonly_fields = ("total_price", "sort_order_customer")
+    # readonly_fields = ("total_price", "sort_order_customer")
 
 
 @admin.register(SupplierPriceList)

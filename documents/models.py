@@ -183,6 +183,9 @@ class OrderItem(models.Model):
         related_name="items",
         null=True,
         blank=True,
+        limit_choices_to={
+            "to_remove": False,
+        },
         verbose_name=_("Заказ поставщику"),
     )
     customer_order = models.ForeignKey(
@@ -191,6 +194,9 @@ class OrderItem(models.Model):
         related_name="items",
         null=True,
         blank=True,
+        limit_choices_to={
+            "to_remove": False,
+        },
         verbose_name=_("Заказ покупателя"),
     )
     warehouse = models.ForeignKey(
