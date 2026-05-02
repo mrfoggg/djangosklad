@@ -6,9 +6,9 @@ from unfold.widgets import UnfoldAdminMoneyWidget
 
 from .models import (
     CustomerOrder,
-    CustomerOrderItem,
+    # CustomerOrderItem,
     PurchaseOrder,
-    PurchaseOrderItem,
+    # PurchaseOrderItem,
     SupplierPriceItem,
     SupplierPriceList,
 )
@@ -57,14 +57,14 @@ class SupplierPriceListAdmin(ModelAdmin):
     readonly_fields = ("id", "dt_created", "dt_updated", "dt_applied")
 
 
-class PurchaseOrderItemInline(TabularInline):
-    model = PurchaseOrderItem
-    extra = 1
-    formfield_overrides = {
-        MoneyField: {"widget": UnfoldAdminMoneyWidget},
-    }
-    # Добавляем количество и цену
-    fields = ("product", "quantity", "price")
+# class PurchaseOrderItemInline(TabularInline):
+#     model = PurchaseOrderItem
+#     extra = 1
+#     formfield_overrides = {
+#         MoneyField: {"widget": UnfoldAdminMoneyWidget},
+#     }
+#     # Добавляем количество и цену
+#     fields = ("product", "quantity", "price")
 
 
 @admin.register(PurchaseOrder)
@@ -73,7 +73,7 @@ class PurchaseOrderAdmin(ModelAdmin):
     list_filter = ("is_applied", "supplier")
     readonly_fields = ("id", "dt_created", "dt_updated", "dt_applied")
 
-    inlines = [PurchaseOrderItemInline]
+    # inlines = [PurchaseOrderItemInline]
 
     fieldsets = (
         (
@@ -104,11 +104,11 @@ class PurchaseOrderAdmin(ModelAdmin):
         ]
 
 
-class SalesOrderItemInline(TabularInline):
-    model = CustomerOrderItem
-    extra = 1
-    # Здесь можно будет потом добавить AJAX для подтягивания розничной цены
-    tab = True
+# class SalesOrderItemInline(TabularInline):
+#     model = CustomerOrderItem
+#     extra = 1
+#     # Здесь можно будет потом добавить AJAX для подтягивания розничной цены
+#     tab = True
 
 
 @admin.register(CustomerOrder)
@@ -116,4 +116,4 @@ class SalesOrderAdmin(ModelAdmin):
     list_display = ["id", "customer", "status", "dt_created", "is_applied"]
     list_filter = ["status", "is_applied"]
     search_fields = ["customer", "id"]
-    inlines = [SalesOrderItemInline]
+    # inlines = [SalesOrderItemInline]

@@ -124,44 +124,43 @@ class PurchaseOrder(BaseDocumentModel):
         verbose_name = _("Заказ поставщику")
         verbose_name_plural = _("Заказы поставщикам")
 
+    # class PurchaseOrderItem(models.Model):
+    #     """
+    #     Позиция в заказе поставщику.
+    #     Всегда в UAH.
+    #     """
 
-class PurchaseOrderItem(models.Model):
-    """
-    Позиция в заказе поставщику.
-    Всегда в UAH.
-    """
+    #     document = models.ForeignKey(
+    #         PurchaseOrder,
+    #         on_delete=models.CASCADE,
+    #         related_name="items",
+    #         verbose_name=_("Документ"),
+    #     )
+    #     product = models.ForeignKey(
+    #         "catalogs.Product", on_delete=models.PROTECT, verbose_name=_("Товар")
+    #     )
+    #     quantity = models.DecimalField(
+    #         _("Количество"), max_digits=10, decimal_places=3, default=1
+    #     )
+    #     # Заменяем MoneyField на обычный Decimal
+    #     price = models.DecimalField(
+    #         max_digits=12,
+    #         decimal_places=2,
+    #         default=0,
+    #         verbose_name=_("Цена за ед. (UAH)"),
+    #     )
 
-    document = models.ForeignKey(
-        PurchaseOrder,
-        on_delete=models.CASCADE,
-        related_name="items",
-        verbose_name=_("Документ"),
-    )
-    product = models.ForeignKey(
-        "catalogs.Product", on_delete=models.PROTECT, verbose_name=_("Товар")
-    )
-    quantity = models.DecimalField(
-        _("Количество"), max_digits=10, decimal_places=3, default=1
-    )
-    # Заменяем MoneyField на обычный Decimal
-    price = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0,
-        verbose_name=_("Цена за ед. (UAH)"),
-    )
+    #     class Meta:
+    #         verbose_name = _("Позиция заказа")
+    #         verbose_name_plural = _("Позиции заказа")
 
-    class Meta:
-        verbose_name = _("Позиция заказа")
-        verbose_name_plural = _("Позиции заказа")
+    # @property
+    # def total_amount(self):
+    #     # Теперь это простое умножение Decimal на Decimal
+    #     return round(self.price * self.quantity, 2)
 
-    @property
-    def total_amount(self):
-        # Теперь это простое умножение Decimal на Decimal
-        return round(self.price * self.quantity, 2)
-
-    def __str__(self):
-        return f"{self.product} ({self.quantity})"
+    # def __str__(self):
+    #     return f"{self.product} ({self.quantity})"
 
 
 class CustomerOrder(BaseDocumentModel):
@@ -176,7 +175,7 @@ class CustomerOrder(BaseDocumentModel):
     customer = models.ForeignKey(
         "catalogs.Contractor",
         on_delete=models.PROTECT,
-        related_name="sales_orders",
+        related_name="customer_orders",
         # Добавляем фильтрацию: выбираем только тех, кто помечен как покупатель
         limit_choices_to={"is_customer": True},
         verbose_name=_("Покупатель"),
@@ -196,91 +195,91 @@ class CustomerOrder(BaseDocumentModel):
         return f"{_('Заказ')} №{self.id} - {self.customer}"
 
 
-class CustomerOrderItem(models.Model):
-    document = models.ForeignKey(
-        CustomerOrder, related_name="items", on_delete=models.CASCADE
-    )
-    product = models.ForeignKey(
-        "catalogs.Product",
-        on_delete=models.PROTECT,
-        verbose_name=_("Товар"),
-    )
-    quantity = models.PositiveIntegerField(default=1, verbose_name=_("Кол-во"))
-    # Используем MoneyField или DecimalField для цены продажи
-    price = models.DecimalField(
-        max_digits=10, decimal_places=2, verbose_name=_("Цена продажи")
-    )
-
-    class Meta:
-        verbose_name = _("Товар в заказе")
-        verbose_name_plural = _("Товары в заказе")
-
-
-# class OrderItem(models.Model):
-#     """Строка товара, универсальная для закупок и продаж. Позволяет реализовать механим резервирования"""
-
-#     # СВЯЗИ С ЗАКАЗАМИ
-#     purchase_order = models.ForeignKey(
-#         "PurchaseOrder",
-#         on_delete=models.CASCADE,
-#         related_name="items",
-#         null=True,
-#         blank=True,
-#         verbose_name=_("Заказ поставщику"),
+# class CustomerOrderItem(models.Model):
+#     document = models.ForeignKey(
+#         CustomerOrder, related_name="items", on_delete=models.CASCADE
 #     )
-#     customer_order = models.ForeignKey(
-#         "CustomerOrder",
-#         on_delete=models.CASCADE,
-#         related_name="items",
-#         null=True,
-#         blank=True,
-#         verbose_name=_("Заказ покупателя"),
-#     )
-
-#     # ТОВАР И СКЛАД
 #     product = models.ForeignKey(
 #         "catalogs.Product",
 #         on_delete=models.PROTECT,
-#         related_name="order_items",
 #         verbose_name=_("Товар"),
 #     )
-#     warehouse = models.ForeignKey(
-#         "catalogs.Warehouse",
-#         on_delete=models.PROTECT,
-#         related_name="order_items",
-#         verbose_name=_("Склад"),
-#         help_text=_("Склад отгрузки или приемки для этой строки"),
-#     )
-
-#     # КОЛИЧЕСТВО И ЦЕНА
-#     quantity = models.DecimalField(
-#         max_digits=10, decimal_places=2, verbose_name=_("Количество")
-#     )
+#     quantity = models.PositiveIntegerField(default=1, verbose_name=_("Кол-во"))
+#     # Используем MoneyField или DecimalField для цены продажи
 #     price = models.DecimalField(
-#         max_digits=10, decimal_places=2, verbose_name=_("Цена за единицу")
-#     )
-
-#     # ВЫЧИСЛЯЕМОЕ ПОЛЕ
-#     total_price = models.GeneratedField(
-#         expression=F("quantity") * F("price"),
-#         output_field=models.DecimalField(max_digits=10, decimal_places=2),
-#         db_persist=True,
-#         verbose_name=_("Сумма"),
-#     )
-
-#     # СОРТИРОВКА
-#     sort_order_purchase = models.PositiveIntegerField(
-#         default=0, verbose_name=_("Порядок в закупке")
-#     )
-#     sort_order_customer = models.PositiveIntegerField(
-#         default=0, verbose_name=_("Порядок в продаже")
+#         max_digits=10, decimal_places=2, verbose_name=_("Цена продажи")
 #     )
 
 #     class Meta:
 #         verbose_name = _("Товар в заказе")
 #         verbose_name_plural = _("Товары в заказе")
-#         # По умолчанию сортируем по обоим полям (Django применит их по приоритету)
-#         ordering = ["sort_order_purchase", "sort_order_customer"]
 
-#     def __str__(self):
-#         return f"{self.product.name} ({self.quantity})"
+
+class OrderItem(models.Model):
+    """Строка товара, универсальная для закупок и продаж. Позволяет реализовать механим резервирования"""
+
+    # СВЯЗИ С ЗАКАЗАМИ
+    purchase_order = models.ForeignKey(
+        "PurchaseOrder",
+        on_delete=models.CASCADE,
+        related_name="items",
+        null=True,
+        blank=True,
+        verbose_name=_("Заказ поставщику"),
+    )
+    customer_order = models.ForeignKey(
+        "CustomerOrder",
+        on_delete=models.CASCADE,
+        related_name="items",
+        null=True,
+        blank=True,
+        verbose_name=_("Заказ покупателя"),
+    )
+
+    # ТОВАР И СКЛАД
+    product = models.ForeignKey(
+        "catalogs.Product",
+        on_delete=models.PROTECT,
+        related_name="order_items",
+        verbose_name=_("Товар"),
+    )
+    warehouse = models.ForeignKey(
+        "catalogs.Warehouse",
+        on_delete=models.PROTECT,
+        related_name="order_items",
+        verbose_name=_("Склад"),
+        help_text=_("Склад отгрузки или приемки для этой строки"),
+    )
+
+    # КОЛИЧЕСТВО И ЦЕНА
+    quantity = models.DecimalField(
+        max_digits=10, decimal_places=2, verbose_name=_("Количество")
+    )
+    price = models.DecimalField(
+        max_digits=10, decimal_places=2, verbose_name=_("Цена за единицу")
+    )
+
+    # ВЫЧИСЛЯЕМОЕ ПОЛЕ
+    total_price = models.GeneratedField(
+        expression=F("quantity") * F("price"),
+        output_field=models.DecimalField(max_digits=10, decimal_places=2),
+        db_persist=True,
+        verbose_name=_("Сумма"),
+    )
+
+    # СОРТИРОВКА
+    sort_order_purchase = models.PositiveIntegerField(
+        default=0, verbose_name=_("Порядок в закупке")
+    )
+    sort_order_customer = models.PositiveIntegerField(
+        default=0, verbose_name=_("Порядок в продаже")
+    )
+
+    class Meta:
+        verbose_name = _("Товар в заказе")
+        verbose_name_plural = _("Товары в заказе")
+        # По умолчанию сортируем по обоим полям (Django применит их по приоритету)
+        ordering = ["sort_order_purchase", "sort_order_customer"]
+
+    def __str__(self):
+        return f"{self.product.name} ({self.quantity})"
