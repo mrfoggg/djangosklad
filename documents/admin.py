@@ -5,10 +5,10 @@ from unfold.admin import ModelAdmin, TabularInline
 from unfold.widgets import UnfoldAdminMoneyWidget
 
 from .models import (
+    CustomerOrder,
+    CustomerOrderItem,
     PurchaseOrder,
     PurchaseOrderItem,
-    SalesOrder,
-    SalesOrderItem,
     SupplierPriceItem,
     SupplierPriceList,
 )
@@ -105,13 +105,13 @@ class PurchaseOrderAdmin(ModelAdmin):
 
 
 class SalesOrderItemInline(TabularInline):
-    model = SalesOrderItem
+    model = CustomerOrderItem
     extra = 1
     # Здесь можно будет потом добавить AJAX для подтягивания розничной цены
     tab = True
 
 
-@admin.register(SalesOrder)
+@admin.register(CustomerOrder)
 class SalesOrderAdmin(ModelAdmin):
     list_display = ["id", "customer", "status", "dt_created", "is_applied"]
     list_filter = ["status", "is_applied"]
