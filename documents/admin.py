@@ -13,12 +13,54 @@ from .models import (
     SupplierPriceList,
 )
 
+BASE_READONLY_DATES = ("created", "updated")
+BASE_READONLY = ("id",) + BASE_READONLY_DATES
+BASE_FIELDS = (
+    # (BASE_READONLY),
+    BASE_READONLY,
+    "dt_applied",
+    ("is_applied", "force_current_date"),
+    "to_remove",
+)
+BASE_FIELDSETS = ((None, {"fields": BASE_FIELDS}),)
+
+
+class DocumentForm(forms.ModelForm):
+    force_current_date = forms.BooleanField(
+        label=_("Провести оперативно"),
+        required=False,
+        initial=False,
+        help_text=_("Установит текущую дату проведения"),
+    )
+
+
+class BaseDocumentAdmin(ModelAdmin):
+    readonly_fields = BASE_READONLY
+    conditional_fields = {
+        "to_remove": "is_applied == false",
+        "is_applied": "to_remove == false",
+        "dt_applied": "to_remove == false",
+        "force_current_date": "is_applied == true",
+        "status": "to_remove == false",
+    }
+
+    def save_model(self, request, obj, form, change):
+        # print("SAVE, force_current_date:", form.cleaned_data.get("force_current_date"))
+        obj._force_current_date = form.cleaned_data.get("force_current_date", False)
+
+        # obj.user = request.user
+        super().save_model(request, obj, form, change)
+
+
+# def save(self, request, obj, form, change):
+#     print("SAVE")
+#     obj._force_current_date = form.cleaned_data.get("force_current_date", False)
+#     super().save_model(request, obj, form, change)
+
 
 class SupplierPriceItemInline(TabularInline):
     model = SupplierPriceItem
     extra = 1
-    # Здесь можно будет добавить отображение цены в UAH,
-    # если у поставщика включен признак use_usd_prices.
     fields = ("product", "price")
     formfield_overrides = {
         MoneyField: {"widget": UnfoldAdminMoneyWidget},
@@ -102,66 +144,35 @@ class CustomeOrderItemInline(TabularInline):
     # readonly_fields = ("total_price", "sort_order_customer")
 
 
+class SupplierPriceListForm(DocumentForm):
+    class Meta:
+        model = SupplierPriceList
+        fields = "__all__"
+
+
 @admin.register(SupplierPriceList)
-class SupplierPriceListAdmin(ModelAdmin):
-    list_display = ("id", "supplier", "dt_created", "is_applied", "to_remove")
+class SupplierPriceListAdmin(BaseDocumentAdmin):
+    form = SupplierPriceListForm
     list_filter = ("is_applied", "to_remove", "supplier")
     search_fields = ("id", "supplier__last_name")
-
     inlines = [SupplierPriceItemInline]
+    fields = BASE_FIELDS + ("supplier",)
+    readonly_fields = BASE_READONLY
 
-    fieldsets = (
-        (
-            None,
-            {
-                "fields": (
-                    "id",
-                    "supplier",
-                    "is_applied",
-                    "comment",
-                )
-            },
-        ),
-        (
-            _("Служебная информация"),
-            {
-                "fields": ("dt_created", "dt_updated", "dt_applied", "to_remove"),
-                "classes": ("collapse",),
-            },
-        ),
-    )
 
-    readonly_fields = ("id", "dt_created", "dt_updated", "dt_applied")
+class PurchaseOrderForm(DocumentForm):
+    class Meta:
+        model = PurchaseOrder
+        fields = "__all__"
 
 
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(ModelAdmin):
-    list_display = ("id", "supplier", "dt_created", "is_applied")
+    form = PurchaseOrderForm
     list_filter = ("is_applied", "supplier")
-    readonly_fields = ("id", "dt_created", "dt_updated", "dt_applied")
-
+    readonly_fields = BASE_READONLY
+    fields = BASE_FIELDS + ("supplier",)
     inlines = [PurchaseOrderItemInline]
-
-    fieldsets = (
-        (
-            None,
-            {
-                "fields": (
-                    "id",
-                    "supplier",
-                    "is_applied",
-                    "comment",
-                )
-            },
-        ),
-        (
-            "Даты",
-            {
-                "fields": ("dt_created", "dt_updated", "dt_applied"),
-                "classes": ("collapse",),
-            },
-        ),
-    )
 
     class Media:
         # Путь к файлу относительно папки static
@@ -171,16 +182,18 @@ class PurchaseOrderAdmin(ModelAdmin):
         ]
 
 
-# class SalesOrderItemInline(TabularInline):
-#     model = CustomerOrderItem
-#     extra = 1
-#     # Здесь можно будет потом добавить AJAX для подтягивания розничной цены
-#     tab = True
+class CustomerOrderForm(DocumentForm):
+    class Meta:
+        model = CustomerOrder
+        fields = "__all__"
 
 
 @admin.register(CustomerOrder)
-class CusromerOrderAdmin(ModelAdmin):
-    list_display = ["id", "customer", "status", "dt_created", "is_applied"]
+class CustomerOrderAdmin(BaseDocumentAdmin):
+    form = CustomerOrderForm
+
     list_filter = ["status", "is_applied"]
     search_fields = ["customer", "id"]
+    readonly_fields = BASE_READONLY
+    fields = BASE_FIELDS + ("customer", "status")
     inlines = [CustomeOrderItemInline]

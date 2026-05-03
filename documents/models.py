@@ -12,43 +12,52 @@ class BaseDocumentModel(models.Model):
     Абстрактная база для всех документов.
     """
 
-    dt_created = models.DateTimeField(
+    created = models.DateTimeField(
         verbose_name=_("Создан"), auto_now_add=True, db_index=True
     )
-    dt_updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
+    updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
 
     # Флаг проведения документа
     is_applied = models.BooleanField(
         verbose_name=_("Проведен"),
         default=False,
         db_index=True,
-        help_text=_("Документ проведен"),
-    )
-    dt_applied = models.DateTimeField(
-        verbose_name=_("Дата проведения"), null=True, blank=True, editable=False
     )
 
     to_remove = models.BooleanField(
         verbose_name=_("Помечен на удаление"), default=False, db_index=True
     )
 
+    dt_applied = models.DateTimeField(
+        verbose_name=_("Дата проведения"), null=True, blank=True
+    )
+
     def save(self, *args, **kwargs):
-        # Если флаг "Проведен" установлен, а дата проведения еще не задана
-        if self.is_applied and not self.dt_applied:
-            self.dt_applied = timezone.now()
-        # Опционально: если сняли флаг проведения, можно очищать дату
+        # Извлекаем наш флаг из памяти объекта (его туда положила админка)
+        force_now = getattr(self, "_force_current_date", False)
+        print("Save called, force_now:", force_now)
+
+        if self.is_applied:
+            # Условие: ставим текущую дату если:
+            # 1. Даты еще нет (первичное проведение)
+            # 2. ИЛИ пользователь нажал "Провести оперативно"
+            if not self.dt_applied or force_now:
+                self.dt_applied = timezone.now()
+                print("FORCE NOW:", self.dt_applied)
+
         elif not self.is_applied and self.dt_applied:
+            # Если флаг снят — очищаем дату
             self.dt_applied = None
 
         super().save(*args, **kwargs)
 
     class Meta:
         abstract = True
-        ordering = ["-dt_created"]
+        ordering = ["-created"]
 
     def __str__(self):
         # Форматируем даты заранее для удобства
-        created_str = self.dt_created.strftime("%d.%m.%Y")
+        created_str = self.created.strftime("%d.%m.%Y")
 
         if self.is_applied:
             # Если дата проведения по какой-то причине пуста (редкий случай),
@@ -134,7 +143,6 @@ class CustomerOrder(BaseDocumentModel):
         "catalogs.Contractor",
         on_delete=models.PROTECT,
         related_name="customer_orders",
-        # Добавляем фильтрацию: выбираем только тех, кто помечен как покупатель
         limit_choices_to={"is_customer": True},
         verbose_name=_("Покупатель"),
     )
@@ -142,11 +150,12 @@ class CustomerOrder(BaseDocumentModel):
         max_length=20, choices=STATUS_CHOICES, default="new", verbose_name=_("Статус")
     )
     comment = models.TextField(blank=True, null=True, verbose_name=_("Комментарий"))
+    test_date = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = _("Заказ покупателя")
         verbose_name_plural = _("Заказы покупателей")
-        ordering = ["-dt_created"]
+        ordering = ["-created"]
 
     def __str__(self):
         # Используем метод или атрибут имени у Contractor (например, name или last_name)
