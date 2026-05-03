@@ -141,6 +141,8 @@ class ContractorAdmin(ModelAdmin):
         "use_usd_prices": "is_supplier === true",
         # А поле курса показываем только если это поставщик И он использует USD-прайсы
         "usd_rate": "is_supplier === true && use_usd_prices === true",
+        "middle_name": "['IND', 'FOP'].includes(legal_type)",
+        "first_name": "['IND', 'FOP'].includes(legal_type)",
     }
 
     @admin.display(description=_("Полное наименование"))

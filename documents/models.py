@@ -150,7 +150,6 @@ class CustomerOrder(BaseDocumentModel):
         max_length=20, choices=STATUS_CHOICES, default="new", verbose_name=_("Статус")
     )
     comment = models.TextField(blank=True, null=True, verbose_name=_("Комментарий"))
-    test_date = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = _("Заказ покупателя")
