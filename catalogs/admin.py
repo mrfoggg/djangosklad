@@ -1,10 +1,13 @@
 from django import forms
 from django.contrib import admin
+from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django_countries.widgets import CountrySelectWidget
 from unfold.admin import ModelAdmin, StackedInline, TabularInline
+from unfold.contrib.forms.widgets import WysiwygWidget
 
 from .models import (
+    BankAccount,
     Brand,
     BrandSupplier,
     Contractor,
@@ -22,9 +25,22 @@ BASE_READONLY_DATES = ("created", "updated")
 
 class BaseCatalogAdmin(ModelAdmin):
     readonly_fields = BASE_READONLY_DATES
+    formfield_overrides = {
+        models.TextField: {
+            "widget": WysiwygWidget,
+        }
+    }
 
 
 # --- ИНЛАЙНЫ (Вспомогательные модели внутри основных) ---
+
+
+class BankAccountInline(TabularInline):
+    model = BankAccount
+    extra = 1
+    # Для удобства в Unfold можно использовать компактное отображение
+    fields = ("bank_name", "iban", "currency")
+    tab = True
 
 
 class BrandSupplierInline(TabularInline):
@@ -37,6 +53,7 @@ class ContractorLinkInline(TabularInline):
     model = ContractorLink
     extra = 1  # Одна пустая строка для новой ссылки
     fields = ("name", "url")
+    tab = True
 
 
 class LegalDetailsInline(StackedInline):
@@ -44,7 +61,8 @@ class LegalDetailsInline(StackedInline):
     can_delete = False
     verbose_name = _("Юридические реквизиты")
     verbose_name_plural = _("Юридические реквизиты")
-    fieldsets = ((None, {"fields": ("inn", "legal_address")}),)
+    fields = ("inn", "legal_address")
+    tab = True
 
 
 class ProductSupplierInline(TabularInline):
@@ -100,32 +118,24 @@ class ContractorAdmin(BaseCatalogAdmin):
         "is_customer",
     )
 
-    inlines = (LegalDetailsInline, SubsidiariesInline, ContractorLinkInline)
+    def get_inlines(self, request, obj=None):
+        inlines = [LegalDetailsInline, BankAccountInline, ContractorLinkInline]
+        if obj and obj.legal_type == "HLD":
+            inlines.append(SubsidiariesInline)
+        if obj and obj.is_supplier:
+            pass
+        if obj and obj.is_customer:
+            pass
+        return inlines
 
-    fieldsets = (
-        (
-            _("Основная информация"),
-            {
-                "fields": (
-                    "legal_type",
-                    "ownership_type",
-                    "parent_holding",
-                    ("last_name", "first_name", "middle_name"),
-                )
-            },
-        ),
-        (
-            _("Настройки поставщика"),
-            {
-                "fields": (("use_usd_prices", "usd_rate"),),
-                # Эта секция будет видна всегда, но поля внутри
-                # скроются благодаря твоим conditional_fields
-            },
-        ),
-        (
-            _("Контакты и роли"),
-            {"fields": (("email", "is_supplier", "is_customer"), "comment")},
-        ),
+    fields = (
+        "legal_type",
+        "ownership_type",
+        ("last_name", "first_name", "middle_name"),
+        "parent_holding",
+        ("is_supplier", "is_customer"),
+        ("use_usd_prices", "usd_rate"),
+        "email",
     )
 
     conditional_fields = {

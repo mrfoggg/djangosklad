@@ -100,6 +100,16 @@ class Contractor(BaseModel):
     def clean(self):
         super().clean()
 
+        # Если выбран тип "Организация", поле аббревиатуры (ООО, ЧП) обязательно
+        if self.legal_type == self.LegalType.OTHER and not self.ownership_type:
+            raise ValidationError(
+                {
+                    "ownership_type": _(
+                        "Для типа 'Организация' необходимо указать аббревиатуру типа (например: ООО, ПП)."
+                    )
+                }
+            )
+
         # Если контрагент сам является холдингом (HLD)
         if self.legal_type == self.LegalType.HOLDING:
             # И при этом у него заполнен родительский холдинг
@@ -131,10 +141,41 @@ class ContractorLegalDetails(models.Model):
         max_length=20, blank=True, verbose_name=_("ИНН / ЕГРПОУ"), db_index=True
     )
 
-    legal_address = models.TextField(blank=True, verbose_name=_("Юридический адрес"))
+    legal_address = models.CharField(
+        max_length=256, blank=True, verbose_name=_("Юридический адрес")
+    )
 
     class Meta:
         verbose_name = _("Официальные реквизиты")
+
+
+class BankAccount(BaseModel):
+    contractor = models.ForeignKey(
+        Contractor,
+        on_delete=models.CASCADE,
+        related_name="bank_accounts",
+        verbose_name=_("Контрагент"),
+    )
+    bank_name = models.CharField(max_length=255, verbose_name=_("Название банка"))
+    mfo = models.CharField(max_length=6, blank=True, verbose_name=_("МФО"))
+    currency = models.CharField(
+        max_length=3,
+        default="UAH",
+        verbose_name=_("Валюта счета"),
+        help_text=_("Код валюты (UAH, USD, EUR)"),
+    )
+    iban = models.CharField(
+        max_length=34, unique=True, verbose_name=_("IBAN"), db_index=True
+    )
+    note = models.CharField(max_length=255, blank=True, verbose_name=_("Примечание"))
+
+    class Meta:
+        verbose_name = _("Банковский счет")
+        verbose_name_plural = _("Банковские счета")
+        ordering = ["bank_name"]
+
+    def __str__(self):
+        return f"{self.bank_name} ({self.iban[:8]}...)"
 
 
 class ContractorLink(models.Model):
