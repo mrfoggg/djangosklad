@@ -1,10 +1,12 @@
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, GeneratedField
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
+from unfold.views import BaseAutocompleteView
 
 
 class BaseDocumentModel(models.Model):
@@ -241,3 +243,57 @@ class OrderItem(models.Model):
 
     def __str__(self):
         return f"{self.product.name} ({self.quantity})"
+
+
+class PurchaseInvoice(BaseDocumentModel):
+    supplier = models.ForeignKey(
+        "catalogs.Contractor",
+        on_delete=models.CASCADE,
+        limit_choices_to={"is_supplier": True},
+        verbose_name=_("Поставщик"),
+        related_name="purchase_invoices",
+    )
+    bank_account = models.ForeignKey(
+        "catalogs.BankAccount",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name=_("Счет для оплаты"),
+    )
+    note = models.CharField(_("Примечание"), max_length=255, blank=True)
+
+    def clean(self):
+        super().clean()
+
+        # Проверка выполняется только при попытке провести документ
+        if self.is_applied:
+            # 1. Если счет не выбран вручную и у поставщика нет основного счета
+            if not self.bank_account and not self.supplier.primary_account:
+                # Проверяем, есть ли у него вообще хоть какие-то счета
+                if not self.supplier.bank_accounts.exists():
+                    raise ValidationError(
+                        {
+                            "is_applied": _(
+                                "Невозможно провести счет — у поставщика не заведено ни одного банковского счета."
+                            )
+                        }
+                    )
+                else:
+                    # Счета есть, но основной не выбран
+                    raise ValidationError(
+                        {
+                            "bank_account": _(
+                                "У поставщика есть счета, но не выбран основной. "
+                                "Выберите счет вручную или установите основной счет в карточке контрагента."
+                            )
+                        }
+                    )
+
+    def save(self, *args, **kwargs):
+        #  если счет не задан подставляем счет контрагент по умолчанию
+        if not self.bank_account and self.supplier.primary_account:
+            self.bank_account = self.supplier.primary_account
+
+        super().save(*args, **kwargs)
+        self.full_clean()

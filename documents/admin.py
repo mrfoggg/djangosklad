@@ -5,9 +5,12 @@ from djmoney.models.fields import MoneyField
 from unfold.admin import ModelAdmin, TabularInline
 from unfold.widgets import UnfoldAdminMoneyWidget
 
+from catalogs.models import BankAccount
+
 from .models import (
     CustomerOrder,
     OrderItem,
+    PurchaseInvoice,
     PurchaseOrder,
     SupplierPriceItem,
     SupplierPriceList,
@@ -197,3 +200,44 @@ class CustomerOrderAdmin(BaseDocumentAdmin):
     readonly_fields = BASE_READONLY
     fields = BASE_FIELDS + ("customer", "status")
     inlines = [CustomeOrderItemInline]
+
+
+class PurchaseInvoiceForm(DocumentForm):
+    class Meta:
+        model = PurchaseInvoice
+        fields = "__all__"
+
+
+@admin.register(PurchaseInvoice)
+class PurchaseInvoiceAdmin(BaseDocumentAdmin):
+    form = PurchaseInvoiceForm
+    list_filter = ("is_applied", "supplier")
+    readonly_fields = BASE_READONLY
+    fields = BASE_FIELDS + ("supplier", "bank_account")
+
+    # inlines = [PurchaseOrderItemInline]
+    #
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        """
+        Фильтруем список банковских счетов в зависимости от выбранного поставщика.
+        """
+        if db_field.name == "bank_account":
+            # Пытаемся получить ID объекта из URL (режим редактирования)
+            object_id = request.resolver_match.kwargs.get("object_id")
+
+            if object_id:
+                # Если мы редактируем существующий инвойс,
+                # получаем его из базы, чтобы узнать поставщика
+                invoice = self.get_object(request, object_id)
+                if invoice and invoice.supplier:
+                    kwargs["queryset"] = BankAccount.objects.filter(
+                        contractor=invoice.supplier
+                    )
+                else:
+                    kwargs["queryset"] = BankAccount.objects.none()
+            else:
+                # При создании нового документа поставщик еще не выбран в БД.
+                # Список счетов будет пуст до первого сохранения.
+                kwargs["queryset"] = BankAccount.objects.none()
+
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)

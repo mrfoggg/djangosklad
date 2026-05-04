@@ -183,7 +183,7 @@ class BankAccount(BaseModel):
         ordering = ["bank_name"]
 
     def __str__(self):
-        return f"{self.bank_name} ({self.iban[:8]}...)"
+        return f"{self.bank_name} ({self.iban[:18]}...)"
 
 
 class ContractorLink(models.Model):
