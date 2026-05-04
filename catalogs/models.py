@@ -8,10 +8,10 @@ from django_countries.fields import CountryField
 
 
 class BaseModel(models.Model):
-    dt_created = models.DateTimeField(
+    created = models.DateTimeField(
         verbose_name=_("Создан"), auto_now_add=True, db_index=True
     )
-    dt_updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
+    updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
 
     class Meta:
         abstract = True
@@ -72,7 +72,6 @@ class Contractor(BaseModel):
     )
 
     usd_rate = models.DecimalField(
-        max_length=10,
         max_digits=10,
         decimal_places=2,
         default=Decimal("1.00"),
@@ -350,7 +349,7 @@ class Settlement(models.Model):
         return f"{self.settlement_type}. {self.name} ({self.country.name})"
 
 
-class Warehouse(models.Model):
+class Warehouse(BaseModel):
     """Складская точка (физическая или виртуальная)"""
 
     name = models.CharField(max_length=255, verbose_name=_("Название склада"))

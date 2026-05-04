@@ -106,6 +106,11 @@ class SupplierPriceItem(models.Model):
         verbose_name=_("Цена"),
     )
 
+    created = models.DateTimeField(
+        verbose_name=_("Создан"), auto_now_add=True, db_index=True
+    )
+    updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
+
     class Meta:
         verbose_name = _("Позиция прайса")
         verbose_name_plural = _("Позиции прайса")
@@ -222,6 +227,11 @@ class OrderItem(models.Model):
     sort_order_customer = models.PositiveIntegerField(
         default=0, verbose_name=_("Порядок в продаже"), db_index=True
     )
+
+    created = models.DateTimeField(
+        verbose_name=_("Создан"), auto_now_add=True, db_index=True
+    )
+    updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
 
     class Meta:
         verbose_name = _("Товар в заказе")

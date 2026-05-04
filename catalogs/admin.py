@@ -17,6 +17,13 @@ from .models import (
     Warehouse,
 )
 
+BASE_READONLY_DATES = ("created", "updated")
+
+
+class BaseCatalogAdmin(ModelAdmin):
+    readonly_fields = BASE_READONLY_DATES
+
+
 # --- ИНЛАЙНЫ (Вспомогательные модели внутри основных) ---
 
 
@@ -75,7 +82,7 @@ class SubsidiariesInline(TabularInline):
 
 
 @admin.register(Contractor)
-class ContractorAdmin(ModelAdmin):
+class ContractorAdmin(BaseCatalogAdmin):
     # Поиск по ИНН работает через связь legal_details
     search_fields = ("last_name", "first_name", "email", "legal_details__inn")
 
@@ -85,14 +92,12 @@ class ContractorAdmin(ModelAdmin):
         "parent_holding",
         "is_supplier",
         "is_customer",
-        "dt_created",
     )
 
     list_filter = (
         "legal_type",
         "is_supplier",
         "is_customer",
-        "dt_created",
     )
 
     inlines = (LegalDetailsInline, SubsidiariesInline, ContractorLinkInline)
@@ -121,16 +126,7 @@ class ContractorAdmin(ModelAdmin):
             _("Контакты и роли"),
             {"fields": (("email", "is_supplier", "is_customer"), "comment")},
         ),
-        (
-            _("Служебная информация"),
-            {
-                "fields": ("dt_created", "dt_updated"),
-                "classes": ("collapse",),
-            },
-        ),
     )
-
-    readonly_fields = ("dt_created", "dt_updated")
 
     conditional_fields = {
         # Скрываем родителя для самих холдингов
@@ -153,9 +149,7 @@ class ContractorAdmin(ModelAdmin):
 
 
 @admin.register(Product)
-class ProductAdmin(ModelAdmin):
-    list_display = ("get_name", "sku", "main_supplier", "external_id", "dt_created")
-    list_filter = ("dt_created",)
+class ProductAdmin(BaseCatalogAdmin):
     search_fields = ("name", "site_name", "sku", "external_id")
 
     # Подключаем возможность добавлять поставщиков в карточке товара
@@ -174,16 +168,7 @@ class ProductAdmin(ModelAdmin):
                 "fields": (("sku", "external_id"), "main_supplier"),
             },
         ),
-        (
-            _("Даты"),
-            {
-                "fields": ("dt_created", "dt_updated"),
-                "classes": ("collapse",),
-            },
-        ),
     )
-
-    readonly_fields = ("dt_created", "dt_updated")
 
     @admin.display(description=_("Название"))
     def get_name(self, obj):
@@ -205,7 +190,7 @@ class ProductAdmin(ModelAdmin):
 
 
 @admin.register(ProductSupplier)
-class ProductSupplierAdmin(ModelAdmin):
+class ProductSupplierAdmin(BaseCatalogAdmin):
     """Отдельный список связей (если нужно править артикулы массово)"""
 
     list_display = ("product", "supplier", "supplier_sku")
@@ -225,7 +210,7 @@ class BrandAdminForm(forms.ModelForm):
 
 
 @admin.register(Brand)
-class BrandAdmin(ModelAdmin):
+class BrandAdmin(BaseCatalogAdmin):
     form = BrandAdminForm
     inlines = [BrandSupplierInline]
     search_fields = ("name",)
@@ -246,7 +231,7 @@ class BrandAdmin(ModelAdmin):
 
 
 @admin.register(BrandSupplier)
-class BrandSupplierAdmin(ModelAdmin):
+class BrandSupplierAdmin(BaseCatalogAdmin):
     """Отдельный список связей (если нужно править артикулы массово)"""
 
     list_display = ("brand", "supplier")
@@ -267,7 +252,7 @@ class SettlementAdmin(ModelAdmin):
 
 
 @admin.register(Warehouse)
-class WarehouseAdmin(ModelAdmin):
+class WarehouseAdmin(BaseCatalogAdmin):
     # Используем названия полей именно из твоего последнего куска кода
     list_display = ["name", "settlement", "is_virtual"]
     list_filter = ["is_virtual", "settlement"]
