@@ -79,6 +79,14 @@ class Contractor(BaseModel):
         verbose_name=_("Курс доллара (USD/UAH)"),
         help_text=_("Личный курс поставщика для конвертации цен в прайсах"),
     )
+    primary_account = models.ForeignKey(
+        "BankAccount",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        verbose_name=_("Основной счет"),
+    )
     comment = models.TextField(blank=True, verbose_name=_("Комментарий"))
 
     class Meta:

@@ -128,6 +128,24 @@ class ContractorAdmin(BaseCatalogAdmin):
             pass
         return inlines
 
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        """
+        Фильтруем список счетов, чтобы показать только те,
+        которые принадлежат текущему контрагенту.
+        """
+        if db_field.name == "primary_account":
+            # Извлекаем ID объекта из URL (в админке это обычно /change/1/)
+            object_id = request.resolver_match.kwargs.get("object_id")
+
+            if object_id:
+                kwargs["queryset"] = BankAccount.objects.filter(contractor_id=object_id)
+            else:
+                # Если это создание нового контрагента (объекта еще нет),
+                # счетов быть не может
+                kwargs["queryset"] = BankAccount.objects.none()
+
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
     fields = (
         "legal_type",
         "ownership_type",
@@ -135,7 +153,7 @@ class ContractorAdmin(BaseCatalogAdmin):
         "parent_holding",
         ("is_supplier", "is_customer"),
         ("use_usd_prices", "usd_rate"),
-        "email",
+        ("email", "primary_account"),
     )
 
     conditional_fields = {
