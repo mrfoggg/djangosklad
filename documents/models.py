@@ -224,10 +224,10 @@ class OrderItem(models.Model):
 
     # СОРТИРОВКА
     sort_order_purchase = models.PositiveIntegerField(
-        default=0, verbose_name=_("Порядок в закупке"), db_index=True
+        default=0, null=True, blank=True, verbose_name=_("Порядок в закупке"), db_index=True
     )
     sort_order_customer = models.PositiveIntegerField(
-        default=0, verbose_name=_("Порядок в продаже"), db_index=True
+        default=0, null=True, blank=True, verbose_name=_("Порядок в продаже"), db_index=True
     )
 
     created = models.DateTimeField(

@@ -4,7 +4,7 @@ from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
 from unfold.admin import ModelAdmin, TabularInline
 from unfold.widgets import UnfoldAdminMoneyWidget
-from unfold.widgets import UnfoldAdminDecimalFieldWidget, UnfoldAdminSelectWidget
+from unfold.widgets import UnfoldAdminDecimalFieldWidget, UnfoldAdminSelectWidget, UnfoldAdminSplitDateTimeVerticalWidget
 from django.forms.models import BaseInlineFormSet
 
 from catalogs.models import BankAccount
@@ -37,6 +37,7 @@ class DocumentForm(forms.ModelForm):
         initial=False,
         help_text=_("Установит текущую дату проведения"),
     )
+
 
 
 class BaseDocumentAdmin(ModelAdmin):
@@ -103,6 +104,16 @@ class OrderItemInlineForm(forms.ModelForm):
         }
 
 class OrderItemInlineFormSet(BaseInlineFormSet):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Перебираем поля базовой формы, которая используется в наборе
+        # Это изменит label для всех строк инлайна сразу
+        if "sort_order_purchase" in self.form.base_fields:
+            self.form.base_fields["sort_order_purchase"].label = "⇅"
+
+        if "sort_order_customer" in self.form.base_fields:
+            self.form.base_fields["sort_order_customer"].label = "⇅"
+
     def clean(self):
         super().clean()
         if any(self.errors):
@@ -143,11 +154,11 @@ class PurchaseOrderItemInline(TabularInline):
     )
     ordering = ("sort_order_purchase",)
     readonly_fields = ("total_price",)
-    def get_formset(self, request, obj=None, **kwargs):
-        formset = super().get_formset(request, obj, **kwargs)
-        # Подменяем label для конкретного поля в форме инлайна
-        formset.form.base_fields["sort_order_purchase"].label = "Сортировка"
-        return formset
+    # def get_formset(self, request, obj=None, **kwargs):
+    #     formset = super().get_formset(request, obj, **kwargs)
+    #     # Подменяем label для конкретного поля в форме инлайна
+    #     formset.form.base_fields["sort_order_purchase"].label = "Сортировка"
+    #     return formset
 
 
 # для заказа покупателю
