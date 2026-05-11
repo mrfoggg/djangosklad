@@ -4,6 +4,8 @@ from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
 from unfold.admin import ModelAdmin, TabularInline
 from unfold.widgets import UnfoldAdminMoneyWidget
+from unfold.widgets import UnfoldAdminDecimalFieldWidget, UnfoldAdminSelectWidget
+from django.forms.models import BaseInlineFormSet
 
 from catalogs.models import BankAccount
 
@@ -83,32 +85,55 @@ class OrderItemInlineForm(forms.ModelForm):
 
             if purchase_applied or customer_applied:
                 for name, field in self.fields.items():
-                    field.disabled = True
+                    # Блокируем все поля, КРОМЕ полей сортировки
+                    if "sort_order" not in name:
+                        field.disabled = True
 
+    class Meta:
+        widgets = {
+	        'product': UnfoldAdminSelectWidget(attrs={
+	            'style': 'width: 250px;', # Жесткая фиксация
+	        }),
+            'price': UnfoldAdminDecimalFieldWidget(attrs={
+                'style': 'width: 120px;', # Жесткая фиксация
+            }),
+            'quantity': UnfoldAdminDecimalFieldWidget(attrs={
+                'style': 'width: 90px;', # Жесткая фиксация
+            }),
+        }
+
+class OrderItemInlineFormSet(BaseInlineFormSet):
     def clean(self):
-        # Дополнительная защита: запрещаем удаление, если связаны проведенные доки
-        if self.instance and self.instance.pk:
-            if (
-                self.instance.purchase_order and self.instance.purchase_order.is_applied
-            ) or (
-                self.instance.customer_order and self.instance.customer_order.is_applied
-            ):
-                if self.cleaned_data.get("DELETE"):
-                    raise forms.ValidationError(
-                        "Нельзя удалить строку, связанную с проведенным документом"
-                    )
-        return super().clean()
+        super().clean()
+        if any(self.errors):
+            return
 
+        for form in self.forms:
+            if self.can_delete and self._should_delete_form(form):
+                instance = form.instance
+                if instance and instance.pk:
+                    # Определяем, какой именно документ блокирует удаление
+                    applied_doc = None
+                    if instance.purchase_order and instance.purchase_order.is_applied:
+                        applied_doc = instance.purchase_order
+                    elif instance.customer_order and instance.customer_order.is_applied:
+                        applied_doc = instance.customer_order
 
+                    if applied_doc:
+                        # Используем f-строку для вывода названия документа
+                        raise forms.ValidationError(
+                            f"Нельзя удалить строку: документ '{applied_doc}' уже проведен."
+                        )
+
+# для заказа поставщику
 class PurchaseOrderItemInline(TabularInline):
     model = OrderItem
     form = OrderItemInlineForm
-    ordering_field = "sort_order_purchase"
-    hide_ordering_field = True
+    formset = OrderItemInlineFormSet
     extra = 0
     # tab = True
     fields = (
-        # "sort_order_purchase",
+        "sort_order_purchase",
         "product",
         "price",
         "quantity",
@@ -116,31 +141,32 @@ class PurchaseOrderItemInline(TabularInline):
         "customer_order",
         "warehouse",
     )
+    ordering = ("sort_order_purchase",)
     readonly_fields = ("total_price",)
+    def get_formset(self, request, obj=None, **kwargs):
+        formset = super().get_formset(request, obj, **kwargs)
+        # Подменяем label для конкретного поля в форме инлайна
+        formset.form.base_fields["sort_order_purchase"].label = "Сортировка"
+        return formset
 
 
+# для заказа покупателю
 class CustomeOrderItemInline(TabularInline):
     model = OrderItem
     form = OrderItemInlineForm
-    ordering_field = "sort_order_customer"
-    hide_ordering_field = True
+    formset = OrderItemInlineFormSet
     extra = 0
 
-    # КЛЮЧЕВОЙ МОМЕНТ:
-    # Используем list_display для активации JS и вывода иконки
-    list_display = ("sort_order_customer", "product", "price")
-
-    # В fields указываем порядок, НО поле сортировки НЕ добавляем туда как обычную строку
-    # Мы добавим его в readonly_fields или воспользуемся тем, что Unfold
-    # сам должен его подтянуть, если оно указано в ordering_field.
-    # fields = (
-    #     "product",
-    #     "price",
-    #     "quantity",
-    #     "total_price",
-    #     "purchase_order",
-    #     "warehouse",
-    # )
+    fields = (
+        "sort_order_customer",
+        "product",
+        "price",
+        "quantity",
+        "total_price",
+        "purchase_order",
+        "warehouse",
+    )
+    ordering = ("sort_order_customer",)
     readonly_fields = ("total_price",)
 
     # Если после этого ошибка "input is null" осталась, добавь поле в readonly_fields:
@@ -168,29 +194,27 @@ class PurchaseOrderForm(DocumentForm):
         model = PurchaseOrder
         fields = "__all__"
 
-
+# Заказ поставщику
 @admin.register(PurchaseOrder)
-class PurchaseOrderAdmin(ModelAdmin):
+class PurchaseOrderAdmin(BaseDocumentAdmin):
     form = PurchaseOrderForm
     list_filter = ("is_applied", "supplier")
-    readonly_fields = BASE_READONLY
-    fields = BASE_FIELDS + ("supplier",)
     inlines = [PurchaseOrderItemInline]
 
     class Media:
-        # Путь к файлу относительно папки static
         js = [
             "https://cdn.jsdelivr.net/npm/sweetalert2@11",
+            "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_price_fetch.js",
+            "documents/js/admin_sortable_init.js",
         ]
-
 
 class CustomerOrderForm(DocumentForm):
     class Meta:
         model = CustomerOrder
         fields = "__all__"
 
-
+# Заказ покупателя
 @admin.register(CustomerOrder)
 class CustomerOrderAdmin(BaseDocumentAdmin):
     form = CustomerOrderForm
@@ -201,6 +225,13 @@ class CustomerOrderAdmin(BaseDocumentAdmin):
     fields = BASE_FIELDS + ("customer", "status")
     inlines = [CustomeOrderItemInline]
 
+    class Media:
+        js = [
+            "https://cdn.jsdelivr.net/npm/sweetalert2@11",
+            "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
+            "documents/js/admin_price_fetch.js",
+            "documents/js/admin_sortable_init.js",
+        ]
 
 class PurchaseInvoiceForm(DocumentForm):
     class Meta:

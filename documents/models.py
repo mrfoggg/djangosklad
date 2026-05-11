@@ -182,7 +182,7 @@ class OrderItem(models.Model):
         max_digits=10, decimal_places=2, verbose_name=_("Цена за единицу")
     )
     quantity = models.DecimalField(
-        max_digits=10, decimal_places=2, verbose_name=_("Количество")
+        max_digits=10, decimal_places=2, default=1.00, verbose_name=_("Количество")
     )
     # ВЫЧИСЛЯЕМОЕ ПОЛЕ
     total_price = models.GeneratedField(
@@ -243,6 +243,12 @@ class OrderItem(models.Model):
 
     def __str__(self):
         return f"{self.product.name} ({self.quantity})"
+
+    # def delete(self, *args, **kwargs):
+    #     if (self.purchase_order and self.purchase_order.is_applied) or \
+    #         (self.customer_order and self.customer_order.is_applied):
+    #         raise ValidationError("Нельзя удалить строку в проведенном документе.")
+    #     super().delete(*args, **kwargs)
 
 
 class PurchaseInvoice(BaseDocumentModel):
