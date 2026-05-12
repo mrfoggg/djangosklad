@@ -235,6 +235,37 @@ class ContractorLink(models.Model):
         return f"{self.name}: {self.url}"
 
 
+class Organization(BaseModel):  # Наследуемся от вашей BaseModel
+    name = models.CharField(max_length=127, verbose_name=_("Название организации"))
+    full_name = models.CharField(
+        max_length=255, blank=True, verbose_name=_("Полное название")
+    )
+    inn = models.CharField(max_length=12, blank=True, verbose_name=_("ИНН"))
+    is_default = models.BooleanField(
+        default=False,
+        verbose_name=_("Использовать по умолчанию"),
+        help_text=_(
+            "Эта организация будет автоматически выбираться в новых документах"
+        ),
+    )
+
+    class Meta:
+        verbose_name = _("Организация")
+        verbose_name_plural = _("Организации")
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        # Если эта организация устанавливается как "по умолчанию",
+        # снимаем этот флаг у всех остальных организаций.
+        if self.is_default:
+            Organization.objects.filter(is_default=True).exclude(pk=self.pk).update(
+                is_default=False
+            )
+        super().save(*args, **kwargs)
+
+
 class Product(BaseModel):
     name = models.CharField(max_length=255, blank=True, verbose_name=_("Название"))
 

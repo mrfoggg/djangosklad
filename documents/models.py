@@ -8,6 +8,18 @@ from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
 from unfold.views import BaseAutocompleteView
 
+from catalogs.models import Organization
+
+
+def get_default_organization_id():
+    # Используем .values_list, чтобы вытащить только ID и не грузить весь объект
+    org_id = (
+        Organization.objects.filter(is_default=True)
+        .values_list("id", flat=True)
+        .first()
+    )
+    return org_id
+
 
 class BaseDocumentModel(models.Model):
     """
@@ -18,6 +30,13 @@ class BaseDocumentModel(models.Model):
         verbose_name=_("Создан"), auto_now_add=True, db_index=True
     )
     updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
+
+    organization = models.ForeignKey(
+        Organization,
+        default=get_default_organization_id,
+        on_delete=models.PROTECT,  # Для документов лучше PROTECT, чтобы не удалить юрлицо с историей
+        verbose_name=_("Организация"),
+    )
 
     # Флаг проведения документа
     is_applied = models.BooleanField(
@@ -80,6 +99,15 @@ class SupplierPriceList(BaseDocumentModel):
         limit_choices_to={"is_supplier": True},
         verbose_name=_("Поставщик"),
         related_name="price_lists",
+    )
+    # Переопределяем поле базовой модели специально для прайса
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_("Организация"),
+        help_text=_("Оставьте пустым, если цена общая для всех организаций"),
     )
     comment = models.TextField(_("Комментарий"), blank=True)
 
@@ -224,10 +252,18 @@ class OrderItem(models.Model):
 
     # СОРТИРОВКА
     sort_order_purchase = models.PositiveIntegerField(
-        default=0, null=True, blank=True, verbose_name=_("Порядок в закупке"), db_index=True
+        default=0,
+        null=True,
+        blank=True,
+        verbose_name=_("Порядок в закупке"),
+        db_index=True,
     )
     sort_order_customer = models.PositiveIntegerField(
-        default=0, null=True, blank=True, verbose_name=_("Порядок в продаже"), db_index=True
+        default=0,
+        null=True,
+        blank=True,
+        verbose_name=_("Порядок в продаже"),
+        db_index=True,
     )
 
     created = models.DateTimeField(

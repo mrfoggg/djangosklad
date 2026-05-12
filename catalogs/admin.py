@@ -15,6 +15,7 @@ from .models import (
     Contractor,
     ContractorLegalDetails,
     ContractorLink,
+    Organization,
     Product,
     ProductSupplier,
     Settlement,
@@ -205,6 +206,12 @@ class ContractorAdmin(BaseCatalogAdmin):
         return str(obj)
 
     get_full_name.admin_order_field = "last_name"
+
+
+@admin.register(Organization)
+class OrganizationAdmin(BaseCatalogAdmin):
+    list_display = ("name", "inn", "is_default")
+    list_editable = ("is_default",)
 
 
 @admin.register(Product)

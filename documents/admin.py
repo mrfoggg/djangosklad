@@ -1,11 +1,15 @@
 from django import forms
 from django.contrib import admin
+from django.forms.models import BaseInlineFormSet
 from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
 from unfold.admin import ModelAdmin, TabularInline
-from unfold.widgets import UnfoldAdminMoneyWidget
-from unfold.widgets import UnfoldAdminDecimalFieldWidget, UnfoldAdminSelectWidget, UnfoldAdminSplitDateTimeVerticalWidget
-from django.forms.models import BaseInlineFormSet
+from unfold.widgets import (
+    UnfoldAdminDecimalFieldWidget,
+    UnfoldAdminMoneyWidget,
+    UnfoldAdminSelectWidget,
+    UnfoldAdminSplitDateTimeVerticalWidget,
+)
 
 from catalogs.models import BankAccount
 
@@ -26,6 +30,7 @@ BASE_FIELDS = (
     "dt_applied",
     ("is_applied", "force_current_date"),
     "to_remove",
+    "organization",
 )
 BASE_FIELDSETS = ((None, {"fields": BASE_FIELDS}),)
 
@@ -37,7 +42,6 @@ class DocumentForm(forms.ModelForm):
         initial=False,
         help_text=_("Установит текущую дату проведения"),
     )
-
 
 
 class BaseDocumentAdmin(ModelAdmin):
@@ -92,16 +96,23 @@ class OrderItemInlineForm(forms.ModelForm):
 
     class Meta:
         widgets = {
-	        'product': UnfoldAdminSelectWidget(attrs={
-	            'style': 'width: 250px;', # Жесткая фиксация
-	        }),
-            'price': UnfoldAdminDecimalFieldWidget(attrs={
-                'style': 'width: 120px;', # Жесткая фиксация
-            }),
-            'quantity': UnfoldAdminDecimalFieldWidget(attrs={
-                'style': 'width: 90px;', # Жесткая фиксация
-            }),
+            "product": UnfoldAdminSelectWidget(
+                attrs={
+                    "style": "width: 250px;",  # Жесткая фиксация
+                }
+            ),
+            "price": UnfoldAdminDecimalFieldWidget(
+                attrs={
+                    "style": "width: 120px;",  # Жесткая фиксация
+                }
+            ),
+            "quantity": UnfoldAdminDecimalFieldWidget(
+                attrs={
+                    "style": "width: 90px;",  # Жесткая фиксация
+                }
+            ),
         }
+
 
 class OrderItemInlineFormSet(BaseInlineFormSet):
     def __init__(self, *args, **kwargs):
@@ -135,6 +146,7 @@ class OrderItemInlineFormSet(BaseInlineFormSet):
                         raise forms.ValidationError(
                             f"Нельзя удалить строку: документ '{applied_doc}' уже проведен."
                         )
+
 
 # для заказа поставщику
 class PurchaseOrderItemInline(TabularInline):
@@ -205,6 +217,7 @@ class PurchaseOrderForm(DocumentForm):
         model = PurchaseOrder
         fields = "__all__"
 
+
 # Заказ поставщику
 @admin.register(PurchaseOrder)
 class PurchaseOrderAdmin(BaseDocumentAdmin):
@@ -220,10 +233,12 @@ class PurchaseOrderAdmin(BaseDocumentAdmin):
             "documents/js/admin_sortable_init.js",
         ]
 
+
 class CustomerOrderForm(DocumentForm):
     class Meta:
         model = CustomerOrder
         fields = "__all__"
+
 
 # Заказ покупателя
 @admin.register(CustomerOrder)
@@ -243,6 +258,7 @@ class CustomerOrderAdmin(BaseDocumentAdmin):
             "documents/js/admin_price_fetch.js",
             "documents/js/admin_sortable_init.js",
         ]
+
 
 class PurchaseInvoiceForm(DocumentForm):
     class Meta:
