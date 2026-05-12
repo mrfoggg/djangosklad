@@ -63,7 +63,8 @@ INSTALLED_APPS = [
     "documents.apps.DocumentsConfig",
     "registers.apps.RegistersConfig",
     "django_countries",
-    'adminsortable2'
+    'adminsortable2',
+    'mptt',
 ]
 
 MIDDLEWARE = [

@@ -3,6 +3,7 @@ from django.contrib import admin
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django_countries.widgets import CountrySelectWidget
+from mptt.admin import DraggableMPTTAdmin
 from unfold.admin import ModelAdmin, StackedInline, TabularInline
 from unfold.contrib.forms.widgets import WysiwygWidget
 
@@ -10,6 +11,7 @@ from .models import (
     BankAccount,
     Brand,
     BrandSupplier,
+    Category,
     Contractor,
     ContractorLegalDetails,
     ContractorLink,
@@ -99,6 +101,34 @@ class SubsidiariesInline(TabularInline):
 # --- АДМИН-КЛАССЫ ---
 
 
+@admin.register(Category)
+class CategoryAdmin(DraggableMPTTAdmin, ModelAdmin):
+    # Настройки отображения дерева
+    # mptt_level_indent — отступ каждой ветки в пикселях
+    mptt_level_indent = 20
+
+    # Поля, которые будут отображаться в списке
+    # 'tree_actions' — это кнопки развернуть/свернуть и ручка для перетаскивания
+    # 'indented_title' — название категории с учетом вложенности
+    list_display = (
+        "tree_actions",
+        "indented_title",
+        "slug",
+        "created",
+    )
+
+    list_display_links = ("indented_title",)
+
+    # Автоматическая генерация слага из названия
+    prepopulated_fields = {"slug": ("name",)}
+
+    # Поиск по категориям
+    search_fields = ("name", "slug")
+
+    # Настройки для Unfold (Tailwind стилизация)
+    list_filter_submit = True  # Кнопка применения фильтров
+
+
 @admin.register(Contractor)
 class ContractorAdmin(BaseCatalogAdmin):
     # Поиск по ИНН работает через связь legal_details
@@ -151,7 +181,7 @@ class ContractorAdmin(BaseCatalogAdmin):
         "ownership_type",
         ("last_name", "first_name", "middle_name"),
         "parent_holding",
-        ("is_supplier", "is_customer"),
+        ("is_supplier", "is_customer", "is_manufacturer"),
         ("use_usd_prices", "usd_rate"),
         ("email", "primary_account"),
     )
@@ -163,6 +193,7 @@ class ContractorAdmin(BaseCatalogAdmin):
         "ownership_type": "legal_type === 'OTH'",
         # Поле "Цены в USD" показываем только поставщикам
         "use_usd_prices": "is_supplier === true",
+        "is_manufacturer": "is_supplier === true",
         # А поле курса показываем только если это поставщик И он использует USD-прайсы
         "usd_rate": "is_supplier === true && use_usd_prices === true",
         "middle_name": "['IND', 'FOP'].includes(legal_type)",
@@ -191,9 +222,13 @@ class ProductAdmin(BaseCatalogAdmin):
             },
         ),
         (
-            _("Идентификаторы и логистика"),
+            _("Идентификаторы и атрибуты"),
             {
-                "fields": (("sku", "external_id"), "main_supplier"),
+                "fields": (
+                    ("sku", "external_id"),
+                    ("brand", "main_supplier"),
+                    ("category", "subcategories"),
+                ),
             },
         ),
     )
@@ -215,6 +250,28 @@ class ProductAdmin(BaseCatalogAdmin):
             else:
                 kwargs["queryset"] = ProductSupplier.objects.none()
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def formfield_for_manytomany(
+        self, db_field, request, **kwargs
+    ):  # Должно быть 3 аргумента кроме self
+        if db_field.name == "subcategories":
+            # Получаем текущий объект из контекста (если редактируем существующий)
+            # В Django Admin объект обычно доступен через request или передается в метод
+            # Но проще всего получить ID из URL, если мы на странице редактирования
+            object_id = request.resolver_match.kwargs.get("object_id")
+
+            if object_id:
+                obj = self.get_object(request, object_id)
+                if obj and obj.category:
+                    # Фильтруем подкатегории (потомки выбранной категории)
+                    kwargs["queryset"] = obj.category.get_descendants()
+                else:
+                    kwargs["queryset"] = Category.objects.none()
+            else:
+                # Если это создание нового товара
+                kwargs["queryset"] = Category.objects.none()
+
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
 
 
 @admin.register(ProductSupplier)

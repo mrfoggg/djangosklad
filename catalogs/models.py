@@ -5,6 +5,7 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django_countries.fields import CountryField
+from mptt.models import MPTTModel, TreeForeignKey
 
 
 class BaseModel(models.Model):
@@ -15,6 +16,30 @@ class BaseModel(models.Model):
 
     class Meta:
         abstract = True
+
+
+class Category(MPTTModel, BaseModel):
+    name = models.CharField(_("Название"), max_length=255)
+    parent = TreeForeignKey(
+        "self",
+        db_index=True,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="children",
+        verbose_name=_("Родительская категория"),
+    )
+    slug = models.SlugField(max_length=255, unique=True, verbose_name=_("Слаг (URL)"))
+
+    class MPTTMeta:
+        order_insertion_by = ["name"]
+
+    class Meta:
+        verbose_name = _("Категория")
+        verbose_name_plural = _("Категории")
+
+    def __str__(self):
+        return self.name
 
 
 class Contractor(BaseModel):
@@ -51,6 +76,7 @@ class Contractor(BaseModel):
     email = models.EmailField(blank=True, verbose_name=_("Email"))
     is_supplier = models.BooleanField(default=True, verbose_name=_("Поставщик"))
     is_customer = models.BooleanField(default=True, verbose_name=_("Покупатель"))
+    is_manufacturer = models.BooleanField(default=True, verbose_name=_("Производитель"))
 
     parent_holding = models.ForeignKey(
         "self",
@@ -132,6 +158,9 @@ class Contractor(BaseModel):
                 )
 
     def save(self, *args, **kwargs):
+        # Если не поставщик, то точно не производитель
+        if not self.is_supplier:
+            self.is_manufacturer = False
         # Запускаем валидацию перед сохранением
         self.full_clean()
         super().save(*args, **kwargs)
@@ -231,6 +260,34 @@ class Product(BaseModel):
         verbose_name=_("ID в OpenCart"),
     )
 
+    category = TreeForeignKey(
+        "Category",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="products",
+        verbose_name=_("Категория"),
+    )
+
+    subcategories = models.ManyToManyField(
+        "Category",
+        blank=True,
+        related_name="subcategory_products",
+        verbose_name=_("Подкатегории"),
+        help_text=_(
+            "Сначала выберите основную категорию, чтобы увидеть список доступных подкатегорий"
+        ),
+    )
+
+    brand = models.ForeignKey(
+        "Brand",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="products",
+        verbose_name=_("Бренд"),
+    )
+
     main_supplier = models.ForeignKey(
         "ProductSupplier",
         on_delete=models.SET_NULL,
@@ -323,6 +380,15 @@ class Brand(BaseModel):
         related_name="main_for_brand",
         verbose_name=_("Основной поставщик"),
         help_text=_("Выберите из списка уже добавленных поставщиков бренда"),
+    )
+
+    manufacturer = models.ForeignKey(
+        "Contractor",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        limit_choices_to={"is_manufacturer": True},  # Фильтр прямо в БД
+        verbose_name="Контрагент производителя",
     )
 
     class Meta:
