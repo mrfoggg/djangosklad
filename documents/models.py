@@ -160,6 +160,9 @@ class PurchaseOrder(BaseDocumentModel):
     )
     comment = models.TextField(_("Комментарий"), blank=True)
 
+    def __str__(self):
+        return f"Заказ №{self.id} поставщику {self.supplier} от {self.created.strftime('%Y-%m-%d')}"
+
     class Meta(BaseDocumentModel.Meta):
         verbose_name = _("Заказ поставщику")
         verbose_name_plural = _("Заказы поставщикам")

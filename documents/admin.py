@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib import admin
+from django.db.models import Q
 from django.forms.models import BaseInlineFormSet
 from django.urls import reverse
 from django.utils.html import format_html
@@ -207,6 +208,7 @@ class InvoiceItemInline(TabularInline):
     model = InvoiceItem
     form = PurchaseInvoiceItemInlineForm
     extra = 0
+    tab = True
 
     def get_formset(self, request, obj=None, **kwargs):
         formset = super().get_formset(request, obj, **kwargs)
@@ -217,6 +219,24 @@ class InvoiceItemInline(TabularInline):
     # Добавляем get_order_link в список полей
     fields = ("sort_order", "get_order_link", "order_item", "get_price", "get_total")
     readonly_fields = ("get_order_link", "get_price", "get_total")
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "order_item":
+            object_id = request.resolver_match.kwargs.get("object_id")
+            if object_id:
+                invoice = PurchaseInvoice.objects.filter(pk=object_id).first()
+                if invoice:
+                    # Берем ID всех заказов, которые выбраны в ManyToMany поле "orders"
+                    selected_order_ids = invoice.orders.values_list("id", flat=True)
+                    # Показываем только айтемы из этих заказов
+                    kwargs["queryset"] = OrderItem.objects.filter(
+                        purchase_order_id__in=selected_order_ids
+                    )
+                else:
+                    kwargs["queryset"] = OrderItem.objects.none()
+            else:
+                kwargs["queryset"] = OrderItem.objects.none()
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     @admin.display(description=_("Заказ"))
     def get_order_link(self, obj):
@@ -351,3 +371,31 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
                 kwargs["queryset"] = BankAccount.objects.none()
 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        """
+        Фильтр заказов-оснований:
+        Тот же поставщик ИЛИ его холдинг + статус 'Проведен'.
+        """
+        if db_field.name == "orders":
+            object_id = request.resolver_match.kwargs.get("object_id")
+            if object_id:
+                invoice = self.get_object(request, object_id)
+                if invoice and invoice.supplier:
+                    supplier = invoice.supplier
+
+                    # Условие: (Сам поставщик ИЛИ его холдинг) И обязательно проведен
+                    query = Q(supplier=supplier)
+                    if supplier.parent_holding:
+                        query |= Q(supplier=supplier.parent_holding)
+
+                    kwargs["queryset"] = PurchaseOrder.objects.filter(
+                        query,
+                        is_applied=True,  # Строго проведенные
+                    ).distinct()
+                else:
+                    kwargs["queryset"] = PurchaseOrder.objects.none()
+            else:
+                kwargs["queryset"] = PurchaseOrder.objects.none()
+
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
