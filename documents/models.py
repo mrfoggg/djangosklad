@@ -305,6 +305,12 @@ class PurchaseInvoice(BaseDocumentModel):
     )
     note = models.CharField(_("Примечание"), max_length=255, blank=True)
 
+    orders = models.ManyToManyField(
+        "PurchaseOrder",
+        related_name="invoices",
+        verbose_name="Основание: Заказы поставщику",
+    )
+
     def clean(self):
         super().clean()
 
@@ -338,4 +344,31 @@ class PurchaseInvoice(BaseDocumentModel):
             self.bank_account = self.supplier.primary_account
 
         super().save(*args, **kwargs)
-        self.full_clean()
+        # self.full_clean()
+
+    class Meta:
+        verbose_name = _("Входящий счет")
+        verbose_name_plural = _("Входящие счета")
+
+
+class InvoiceItem(models.Model):
+    invoice = models.ForeignKey(
+        "PurchaseInvoice", on_delete=models.CASCADE, related_name="items"
+    )
+    order_item = models.OneToOneField(
+        "OrderItem",
+        on_delete=models.PROTECT,  # Рекомендую PROTECT, чтобы случайно не "снести" строку в проведенном счете
+        related_name="invoice_item",
+        verbose_name=_("Строка заказа"),
+    )
+    sort_order = models.PositiveIntegerField(
+        default=0, blank=True, null=True, verbose_name=_("Порядок"), db_index=True
+    )
+
+    class Meta:
+        verbose_name = _("Позиция входящего счета")
+        verbose_name_plural = _("Позиции входящего счета")
+        ordering = ["sort_order"]
+
+    def __str__(self):
+        return f"{self.invoice.id} [# {self.sort_order}] <- {self.order_item}"

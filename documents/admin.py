@@ -1,6 +1,8 @@
 from django import forms
 from django.contrib import admin
 from django.forms.models import BaseInlineFormSet
+from django.urls import reverse
+from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
 from unfold.admin import ModelAdmin, TabularInline
@@ -15,6 +17,7 @@ from catalogs.models import BankAccount
 
 from .models import (
     CustomerOrder,
+    InvoiceItem,
     OrderItem,
     PurchaseInvoice,
     PurchaseOrder,
@@ -80,19 +83,17 @@ class SupplierPriceItemInline(TabularInline):
 class OrderItemInlineForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.instance and self.instance.pk:
-            purchase_applied = (
-                self.instance.purchase_order and self.instance.purchase_order.is_applied
-            )
-            customer_applied = (
-                self.instance.customer_order and self.instance.customer_order.is_applied
-            )
+        instance = getattr(self, "instance", None)
 
-            if purchase_applied or customer_applied:
-                for name, field in self.fields.items():
-                    # Блокируем все поля, КРОМЕ полей сортировки
-                    if "sort_order" not in name:
-                        field.disabled = True
+        # Проверяем, проведен ли хотя бы один из связанных заказов
+        is_locked = (
+            instance.purchase_order and instance.purchase_order.is_applied
+        ) or (instance.customer_order and instance.customer_order.is_applied)
+
+        if is_locked:
+            for name, field in self.fields.items():
+                if "sort_order" not in name:
+                    field.disabled = True
 
     class Meta:
         widgets = {
@@ -166,11 +167,6 @@ class PurchaseOrderItemInline(TabularInline):
     )
     ordering = ("sort_order_purchase",)
     readonly_fields = ("total_price",)
-    # def get_formset(self, request, obj=None, **kwargs):
-    #     formset = super().get_formset(request, obj, **kwargs)
-    #     # Подменяем label для конкретного поля в форме инлайна
-    #     formset.form.base_fields["sort_order_purchase"].label = "Сортировка"
-    #     return formset
 
 
 # для заказа покупателю
@@ -192,8 +188,63 @@ class CustomeOrderItemInline(TabularInline):
     ordering = ("sort_order_customer",)
     readonly_fields = ("total_price",)
 
-    # Если после этого ошибка "input is null" осталась, добавь поле в readonly_fields:
-    # readonly_fields = ("total_price", "sort_order_customer")
+
+class PurchaseInvoiceItemInlineForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "order_item" in self.fields:
+            # Переопределяем отображение каждой строки в выпадающем списке
+            self.fields["order_item"].label_from_instance = self.label_for_purchase
+
+    def label_for_purchase(self, obj):
+        # Формируем строку: Заказ №X | Товар | Кол-во
+        order_no = obj.purchase_order.id if obj.purchase_order else "???"
+        order_dt = obj.purchase_order.dt_applied if obj.purchase_order else "???"
+        return f"№{order_no} от {order_dt} | {obj.product.name} ({obj.quantity} шт.)"
+
+
+class InvoiceItemInline(TabularInline):
+    model = InvoiceItem
+    form = PurchaseInvoiceItemInlineForm
+    extra = 0
+
+    def get_formset(self, request, obj=None, **kwargs):
+        formset = super().get_formset(request, obj, **kwargs)
+        if "sort_order" in formset.form.base_fields:
+            formset.form.base_fields["sort_order"].label = "⇅"
+        return formset
+
+    # Добавляем get_order_link в список полей
+    fields = ("sort_order", "get_order_link", "order_item", "get_price", "get_total")
+    readonly_fields = ("get_order_link", "get_price", "get_total")
+
+    @admin.display(description=_("Заказ"))
+    def get_order_link(self, obj):
+        # Проверяем наличие связи, чтобы не упасть с ошибкой
+        if obj.order_item and obj.order_item.purchase_order:
+            order = obj.order_item.purchase_order
+
+            # Генерируем URL к странице редактирования заказа
+            # documents — это имя твоего приложения (app_name)
+            url = reverse("admin:documents_purchaseorder_change", args=[order.id])
+
+            return format_html(
+                '<a href="{}" target="_blank" style="font-weight: 600; color: #3b82f6; text-decoration: underline;">{}/{}</a>',
+                url,
+                order.id,
+                order.dt_applied.strftime("%Y-%m-%d") if order.dt_applied else "???",
+            )
+        return "-"
+
+    @admin.display(description=_("Цена"))
+    def get_price(self, obj):
+        # Используем твой DecimalField из OrderItem
+        return obj.order_item.price if obj.order_item else "-"
+
+    @admin.display(description=_("Сумма"))
+    def get_total(self, obj):
+        # Используем твой GeneratedField из OrderItem
+        return obj.order_item.total_price if obj.order_item else "-"
 
 
 class SupplierPriceListForm(DocumentForm):
@@ -271,10 +322,11 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
     form = PurchaseInvoiceForm
     list_filter = ("is_applied", "supplier")
     readonly_fields = BASE_READONLY
-    fields = BASE_FIELDS + ("supplier", "bank_account")
+    fields = BASE_FIELDS + ("supplier", "bank_account", "orders")
+    filter_horizontal = ("orders",)
 
-    # inlines = [PurchaseOrderItemInline]
-    #
+    inlines = [InvoiceItemInline]
+
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         """
         Фильтруем список банковских счетов в зависимости от выбранного поставщика.
