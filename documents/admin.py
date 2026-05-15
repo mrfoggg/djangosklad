@@ -475,27 +475,40 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
         return super().formfield_for_manytomany(db_field, request, **kwargs)
 
     def save_model(self, request, obj, form, change):
-        # Сначала сохраняем сам объект (чтобы ManyToMany связи записались)
+        # Сохраняем объект, чтобы ManyToMany связи (orders) пробросились в базу
         super().save_model(request, obj, form, change)
 
-        # Если чекбокс нажат
         if form.cleaned_data.get("fill_from_orders"):
-            self._fill_items_from_orders(obj)
+            # Передаем request в наш вспомогательный метод
+            self._fill_items_from_orders(request, obj)
 
-    def _fill_items_from_orders(self, obj):
-        """Логика автоматического наполнения позиций счета"""
-        # Берем все OrderItem из выбранных заказов, которые:
-        # 1. Имеют тип PREPAID
-        # 2. Еще не имеют привязанного InvoiceItem
-        items_to_add = OrderItem.objects.filter(
+    def _fill_items_from_orders(self, request, obj):
+        """Логика автоматического наполнения позиций счета с учетом организации"""
+        filters = Q(
             purchase_order__in=obj.orders.all(),
             payment_method_purchase=OrderItem.PaymentMethod.PREPAID,
             invoice_item__isnull=True,
         )
 
+        if obj.organization:
+            filters &= Q(organization=obj.organization)
+
+        items_to_add = OrderItem.objects.filter(filters)
+
+        created_count = 0
         for order_item in items_to_add:
-            InvoiceItem.objects.get_or_create(
+            _, created = InvoiceItem.objects.get_or_create(
                 invoice=obj,
                 order_item=order_item,
                 defaults={"sort_order": order_item.sort_order_purchase},
+            )
+            if created:
+                created_count += 1
+
+        # Теперь request здесь определен и сообщение сработает
+        if created_count > 0:
+            self.message_user(request, f"Добавлено позиций: {created_count}")
+        else:
+            self.message_user(
+                request, "Новых позиций для добавления не найдено", level="WARNING"
             )
