@@ -158,6 +158,14 @@ class PurchaseOrder(BaseDocumentModel):
         verbose_name=_("Поставщик"),
         related_name="purchase_orders",
     )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_("Организация"),
+        help_text=_("Оставьте пустым, если в будут использоваться разные организации"),
+    )
     comment = models.TextField(_("Комментарий"), blank=True)
 
     def __str__(self):
@@ -255,6 +263,15 @@ class OrderItem(models.Model):
         related_name="order_items",
         verbose_name=_("Склад"),
         help_text=_("Склад отгрузки или приемки для этой строки"),
+    )
+
+    organization = models.ForeignKey(
+        "catalogs.Organization",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_("Организация"),
+        help_text=_("Если не указано, берется из шапки заказа"),
     )
 
     # СОРТИРОВКА

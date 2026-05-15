@@ -183,6 +183,7 @@ class PurchaseOrderItemInline(TabularInline):
         "price",
         "quantity",
         "total_price",
+        "organization",
         "customer_order",
         "warehouse",
         "payment_method_purchase",
