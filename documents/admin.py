@@ -433,33 +433,39 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
     def formfield_for_manytomany(self, db_field, request, **kwargs):
         """
         Фильтр заказов-оснований:
-        Тот же поставщик ИЛИ его холдинг + статус 'Проведен'
-        + наличие айтемов PREPAID, на которые еще не выставлен счет.
+        - Поставщик/Холдинг
+        - Статус 'Проведен'
+        - Наличие айтемов PREPAID без счета
+        - Организация айтемов совпадает с организацией счета
         """
         if db_field.name == "orders":
             object_id = request.resolver_match.kwargs.get("object_id")
             if object_id:
                 invoice = self.get_object(request, object_id)
                 if invoice and invoice.supplier:
-                    supplier = invoice.supplier
+                    # 1. Фильтр по поставщику
+                    vendor_query = Q(supplier=invoice.supplier)
+                    if invoice.supplier.parent_holding:
+                        vendor_query |= Q(supplier=invoice.supplier.parent_holding)
 
-                    # 1. Базовое условие по поставщику
-                    vendor_query = Q(supplier=supplier)
-                    if supplier.parent_holding:
-                        vendor_query |= Q(supplier=supplier.parent_holding)
+                    # 2. Фильтр по айтемам с учетом организации
+                    # Нам нужны заказы, где есть хотя бы один айтем:
+                    # - со способом PREPAID
+                    # - без привязанного счета
+                    # - организация которого совпадает с организацией счета (если она там указана)
 
-                    # 2. Условие на наличие "свободных" айтемов PREPAID
-                    # Ищем OrderItem, которые:
-                    # - принадлежат этому заказу
-                    # - имеют тип PREPAID
-                    # - НЕ имеют связанного InvoiceItem (поле invoice_item == None)
-                    unvoiced_prepaid_items = Q(
+                    item_filters = Q(
                         items__payment_method_purchase=OrderItem.PaymentMethod.PREPAID,
                         items__invoice_item__isnull=True,
                     )
 
+                    # Если в счете указана организация, фильтруем заказы,
+                    # в которых есть айтемы именно для этой организации
+                    if invoice.organization:
+                        item_filters &= Q(items__organization=invoice.organization)
+
                     kwargs["queryset"] = PurchaseOrder.objects.filter(
-                        vendor_query, unvoiced_prepaid_items, is_applied=True
+                        vendor_query, item_filters, is_applied=True
                     ).distinct()
                 else:
                     kwargs["queryset"] = PurchaseOrder.objects.none()
