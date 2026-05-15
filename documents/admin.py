@@ -20,6 +20,8 @@ from .models import (
     CustomerOrder,
     InvoiceItem,
     OrderItem,
+    PaymentOrderOut,
+    PaymentOutItem,
     PurchaseInvoice,
     PurchaseOrder,
     SupplierPriceItem,
@@ -327,6 +329,15 @@ class SupplierPriceListForm(DocumentForm):
         fields = "__all__"
 
 
+class PaymentOutItemInline(TabularInline):
+    model = PaymentOutItem
+    extra = 1
+    # Фильтруем счета так же, как мы делали ранее:
+    # только те, где есть неоплаченные айтемы для этой организации
+    verbose_name = _("Оплачиваемый счет")
+    verbose_name_plural = _("Распределение оплаты по счетам")
+
+
 @admin.register(SupplierPriceList)
 class SupplierPriceListAdmin(BaseDocumentAdmin):
     form = SupplierPriceListForm
@@ -521,3 +532,16 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
             self.message_user(
                 request, "Новых позиций для добавления не найдено", level="WARNING"
             )
+
+
+@admin.register(PaymentOrderOut)
+class PaymentOrderOutAdmin(BaseDocumentAdmin):
+    inlines = [PaymentOutItemInline]
+
+    # Объединяем кортежи, чтобы не потерять системные поля из BaseDocumentAdmin
+    readonly_fields = BaseDocumentAdmin.readonly_fields + ("total_debited",)
+
+    def save_model(self, request, obj, form, change):
+        # Здесь в будущем можно добавить логику проверки:
+        # сумма всех PaymentOutItem не должна превышать obj.amount
+        super().save_model(request, obj, form, change)
