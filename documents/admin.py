@@ -251,16 +251,23 @@ class InvoiceItemInline(TabularInline):
             if object_id:
                 invoice = PurchaseInvoice.objects.filter(pk=object_id).first()
                 if invoice:
-                    # Берем ID всех заказов, которые выбраны в ManyToMany поле "orders"
+                    # 1. Берем ID всех заказов, выбранных в "основаниях"
                     selected_order_ids = invoice.orders.values_list("id", flat=True)
-                    # Показываем только айтемы из этих заказов
+
+                    # 2. Фильтруем айтемы:
+                    # - Из выбранных заказов
+                    # - Только предоплата (PREPAID)
+                    # - Которые еще не привязаны к счету (с учетом текущего счета)
                     kwargs["queryset"] = OrderItem.objects.filter(
-                        purchase_order_id__in=selected_order_ids
-                    )
+                        Q(purchase_order_id__in=selected_order_ids),
+                        Q(payment_method_purchase=OrderItem.PaymentMethod.PREPAID),
+                        Q(invoice_item__isnull=True) | Q(invoice_item__invoice=invoice),
+                    ).distinct()
                 else:
                     kwargs["queryset"] = OrderItem.objects.none()
             else:
                 kwargs["queryset"] = OrderItem.objects.none()
+
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     @admin.display(description=_("Заказ"))
