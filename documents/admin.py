@@ -174,9 +174,24 @@ class PurchaseOrderItemInline(TabularInline):
         "customer_order",
         "warehouse",
         "payment_method_purchase",
+        "get_invoice_link",
     )
     ordering = ("sort_order_purchase",)
-    readonly_fields = ("total_price",)
+    readonly_fields = ("total_price", "get_invoice_link")
+
+    @admin.display(description=_("Счет"))
+    def get_invoice_link(self, obj):
+        # Проверяем, есть ли обратная связь от InvoiceItem
+        if hasattr(obj, "invoice_item") and obj.invoice_item:
+            invoice = obj.invoice_item.invoice
+            url = reverse("admin:documents_purchaseinvoice_change", args=[invoice.id])
+
+            return format_html(
+                '<a href="{}" target="_blank" style="font-weight: 600; color: #10b981; text-decoration: underline;">Счет №{}</a>',
+                url,
+                invoice.id,
+            )
+        return "-"
 
 
 # для заказа покупателю
@@ -385,7 +400,8 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
     def formfield_for_manytomany(self, db_field, request, **kwargs):
         """
         Фильтр заказов-оснований:
-        Тот же поставщик ИЛИ его холдинг + статус 'Проведен'.
+        Тот же поставщик ИЛИ его холдинг + статус 'Проведен'
+        + наличие айтемов PREPAID, на которые еще не выставлен счет.
         """
         if db_field.name == "orders":
             object_id = request.resolver_match.kwargs.get("object_id")
@@ -394,14 +410,23 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
                 if invoice and invoice.supplier:
                     supplier = invoice.supplier
 
-                    # Условие: (Сам поставщик ИЛИ его холдинг) И обязательно проведен
-                    query = Q(supplier=supplier)
+                    # 1. Базовое условие по поставщику
+                    vendor_query = Q(supplier=supplier)
                     if supplier.parent_holding:
-                        query |= Q(supplier=supplier.parent_holding)
+                        vendor_query |= Q(supplier=supplier.parent_holding)
+
+                    # 2. Условие на наличие "свободных" айтемов PREPAID
+                    # Ищем OrderItem, которые:
+                    # - принадлежат этому заказу
+                    # - имеют тип PREPAID
+                    # - НЕ имеют связанного InvoiceItem (поле invoice_item == None)
+                    unvoiced_prepaid_items = Q(
+                        items__payment_method_purchase=OrderItem.PaymentMethod.PREPAID,
+                        items__invoice_item__isnull=True,
+                    )
 
                     kwargs["queryset"] = PurchaseOrder.objects.filter(
-                        query,
-                        is_applied=True,  # Строго проведенные
+                        vendor_query, unvoiced_prepaid_items, is_applied=True
                     ).distinct()
                 else:
                     kwargs["queryset"] = PurchaseOrder.objects.none()
