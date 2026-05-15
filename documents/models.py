@@ -331,7 +331,12 @@ class PurchaseInvoice(BaseDocumentModel):
     orders = models.ManyToManyField(
         "PurchaseOrder",
         related_name="invoices",
-        verbose_name="Основание: Заказы поставщику",
+        blank=True,  # Разрешаем пустое поле при создании
+        verbose_name=_("Основание: Заказы поставщику"),
+        help_text=_(
+            "Используется только для фильтрации доступных позиций в строках счета. "
+            "Фактическая связь устанавливается на уровне конкретных товаров."
+        ),
     )
 
     def clean(self):
