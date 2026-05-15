@@ -267,14 +267,23 @@ class InvoiceItemInline(TabularInline):
                     # 1. Берем ID всех заказов, выбранных в "основаниях"
                     selected_order_ids = invoice.orders.values_list("id", flat=True)
 
-                    # 2. Фильтруем айтемы:
-                    # - Из выбранных заказов
-                    # - Только предоплата (PREPAID)
-                    # - Которые еще не привязаны к счету (с учетом текущего счета)
+                    # 2. Базовые фильтры айтемов
+                    item_filters = Q(
+                        purchase_order_id__in=selected_order_ids,
+                        payment_method_purchase=OrderItem.PaymentMethod.PREPAID,
+                    )
+
+                    # 3. Условие "свободности" (нет счета или привязан к текущему)
+                    availability_filter = Q(invoice_item__isnull=True) | Q(
+                        invoice_item__invoice=invoice
+                    )
+
+                    # 4. Фильтр по организации (если в инвойсе она задана)
+                    if invoice.organization:
+                        item_filters &= Q(organization=invoice.organization)
+
                     kwargs["queryset"] = OrderItem.objects.filter(
-                        Q(purchase_order_id__in=selected_order_ids),
-                        Q(payment_method_purchase=OrderItem.PaymentMethod.PREPAID),
-                        Q(invoice_item__isnull=True) | Q(invoice_item__invoice=invoice),
+                        item_filters, availability_filter
                     ).distinct()
                 else:
                     kwargs["queryset"] = OrderItem.objects.none()
