@@ -320,6 +320,18 @@ class OrderItem(models.Model):
     def __str__(self):
         return f"{self.product.name} ({self.quantity})"
 
+    def save(self, *args, **kwargs):
+        print("SAVE OrderItem")
+        # Если организация в строке не указана, пытаемся взять ее из заказа
+        if not self.organization:
+            print("NO organization")
+            # Проверяем наличие закупки или заказа покупателя
+            parent_order = self.purchase_order or self.customer_order
+            if parent_order and parent_order.organization:
+                self.organization = parent_order.organization
+
+        super().save(*args, **kwargs)
+
     # def delete(self, *args, **kwargs):
     #     if (self.purchase_order and self.purchase_order.is_applied) or \
     #         (self.customer_order and self.customer_order.is_applied):
