@@ -85,14 +85,15 @@ class OrderItemInlineForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         instance = getattr(self, "instance", None)
+        if not instance or not instance.pk:
+            return
 
-        # Проверяем, проведен ли хотя бы один из связанных заказов
+        # Проверяем проведение заказов
         is_locked = (
             instance.purchase_order and instance.purchase_order.is_applied
         ) or (instance.customer_order and instance.customer_order.is_applied)
 
         if is_locked:
-            # Список полей, которые ОСТАЮТСЯ доступными для редактирования
             allowed_fields = [
                 "sort_order_purchase",
                 "sort_order_customer",
@@ -100,8 +101,19 @@ class OrderItemInlineForm(forms.ModelForm):
                 "payment_method_customer",
             ]
 
+            # Проверяем, существует ли уже связанный счет
+            has_invoice = hasattr(instance, "invoice_item") and instance.invoice_item
+
             for name, field in self.fields.items():
                 if name not in allowed_fields:
+                    field.disabled = True
+
+                # Дополнительная блокировка для методов оплаты:
+                # Если счет уже выставлен, менять метод оплаты нельзя (он зафиксирован как PREPAID)
+                elif (
+                    name in ["payment_method_purchase", "payment_method_customer"]
+                    and has_invoice
+                ):
                     field.disabled = True
 
     class Meta:
