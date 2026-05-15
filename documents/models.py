@@ -429,3 +429,74 @@ class InvoiceItem(models.Model):
 
     def __str__(self):
         return f"{self.invoice.id} [# {self.sort_order}] <- {self.order_item}"
+
+
+class BaseBankPayment(BaseDocumentModel):
+    """Абстрактный класс для всех банковских платежей"""
+
+    organization = models.ForeignKey(
+        "catalogs.Organization",
+        on_delete=models.PROTECT,
+        verbose_name=_("Наша организация"),
+    )
+    contractor = models.ForeignKey(
+        "catalogs.Contractor",
+        on_delete=models.PROTECT,
+        verbose_name=_("Контрагент"),
+    )
+    amount = models.DecimalField(
+        max_digits=12, decimal_places=2, verbose_name=_("Сумма")
+    )
+    bank_account = models.ForeignKey(
+        "catalogs.BankAccount",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_("Счет контрагента"),
+    )
+    transaction_id = models.CharField(_("ID транзакции"), max_length=100, blank=True)
+
+    class Meta:
+        abstract = True
+
+
+class PaymentOrderOut(BaseBankPayment):
+    """Исходящий платеж (поставщику или возврат покупателю)"""
+
+    # Связывается со счетами поставщиков
+    purchase_invoices = models.ManyToManyField(
+        "PurchaseInvoice",
+        through="PaymentOutItem",
+        verbose_name=_("Оплаченные счета поставщиков"),
+    )
+
+    # Комиссия только здесь
+    bank_commission = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0, verbose_name=_("Комиссия банка")
+    )
+
+    # Сумма, которая РЕАЛЬНО спишется с нашего счета
+    total_debited = models.GeneratedField(
+        expression=F("amount") + F("bank_commission"),
+        output_field=models.DecimalField(max_digits=12, decimal_places=2),
+        db_persist=True,
+        verbose_name=_("Всего списано"),
+    )
+
+    class Meta:
+        verbose_name = _("Платеж исходящий")
+        verbose_name_plural = _("Платежи исходящие")
+
+
+class PaymentOutItem(models.Model):
+    payment = models.ForeignKey(PaymentOrderOut, on_delete=models.CASCADE)
+    invoice = models.ForeignKey(PurchaseInvoice, on_delete=models.CASCADE)
+
+    # Сумма, которую мы относим на этот конкретный счет
+    amount = models.DecimalField(
+        max_digits=12, decimal_places=2, verbose_name=_("Сумма оплаты")
+    )
+
+    class Meta:
+        verbose_name = _("Оплата счета")
+        verbose_name_plural = _("Оплата счетов")
