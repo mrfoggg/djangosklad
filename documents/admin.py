@@ -92,8 +92,16 @@ class OrderItemInlineForm(forms.ModelForm):
         ) or (instance.customer_order and instance.customer_order.is_applied)
 
         if is_locked:
+            # Список полей, которые ОСТАЮТСЯ доступными для редактирования
+            allowed_fields = [
+                "sort_order_purchase",
+                "sort_order_customer",
+                "payment_method_purchase",
+                "payment_method_customer",
+            ]
+
             for name, field in self.fields.items():
-                if "sort_order" not in name:
+                if name not in allowed_fields:
                     field.disabled = True
 
     class Meta:
@@ -165,6 +173,7 @@ class PurchaseOrderItemInline(TabularInline):
         "total_price",
         "customer_order",
         "warehouse",
+        "payment_method_purchase",
     )
     ordering = ("sort_order_purchase",)
     readonly_fields = ("total_price",)
@@ -185,6 +194,7 @@ class CustomeOrderItemInline(TabularInline):
         "total_price",
         "purchase_order",
         "warehouse",
+        "payment_method_customer",
     )
     ordering = ("sort_order_customer",)
     readonly_fields = ("total_price",)

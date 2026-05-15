@@ -202,6 +202,10 @@ class CustomerOrder(BaseDocumentModel):
 class OrderItem(models.Model):
     """Строка товара, универсальная для закупок и продаж. Позволяет реализовать механим резервирования"""
 
+    class PaymentMethod(models.TextChoices):
+        PREPAID = "prepaid", _("Оплата по счету")
+        POSTPAID = "postpaid", _("Постоплата")
+
     product = models.ForeignKey(
         "catalogs.Product",
         on_delete=models.PROTECT,
@@ -273,6 +277,22 @@ class OrderItem(models.Model):
         verbose_name=_("Создан"), auto_now_add=True, db_index=True
     )
     updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
+
+    # Условия оплаты для НАС (поставщику)
+    payment_method_purchase = models.CharField(
+        max_length=20,
+        choices=PaymentMethod.choices,
+        default=PaymentMethod.PREPAID,
+        verbose_name=_("Оплата поставщику"),
+    )
+
+    # Условия оплаты для КЛИЕНТА (нам)
+    payment_method_customer = models.CharField(
+        max_length=20,
+        choices=PaymentMethod.choices,
+        default=PaymentMethod.PREPAID,
+        verbose_name=_("Оплата покупателем"),
+    )
 
     class Meta:
         verbose_name = _("Товар в заказе")
