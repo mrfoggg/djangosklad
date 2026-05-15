@@ -376,6 +376,15 @@ class CustomerOrderAdmin(BaseDocumentAdmin):
 
 
 class PurchaseInvoiceForm(DocumentForm):
+    fill_from_orders = forms.BooleanField(
+        label=_("Заполнить по выбранным заказам"),
+        required=False,
+        initial=False,
+        help_text=_(
+            "Автоматически добавит все недостающие PREPAID позиции из выбранных заказов"
+        ),
+    )
+
     class Meta:
         model = PurchaseInvoice
         fields = "__all__"
@@ -386,8 +395,12 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
     form = PurchaseInvoiceForm
     list_filter = ("is_applied", "supplier")
     readonly_fields = BASE_READONLY
-    fields = BASE_FIELDS + ("supplier", "bank_account", "orders")
+    fields = BASE_FIELDS + ("supplier", "bank_account", "orders", "fill_from_orders")
     filter_horizontal = ("orders",)
+    conditional_fields = {
+        **BaseDocumentAdmin.conditional_fields,
+        "fill_from_orders": "is_applied == false",
+    }
 
     inlines = [InvoiceItemInline]
 
@@ -453,3 +466,29 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
                 kwargs["queryset"] = PurchaseOrder.objects.none()
 
         return super().formfield_for_manytomany(db_field, request, **kwargs)
+
+    def save_model(self, request, obj, form, change):
+        # Сначала сохраняем сам объект (чтобы ManyToMany связи записались)
+        super().save_model(request, obj, form, change)
+
+        # Если чекбокс нажат
+        if form.cleaned_data.get("fill_from_orders"):
+            self._fill_items_from_orders(obj)
+
+    def _fill_items_from_orders(self, obj):
+        """Логика автоматического наполнения позиций счета"""
+        # Берем все OrderItem из выбранных заказов, которые:
+        # 1. Имеют тип PREPAID
+        # 2. Еще не имеют привязанного InvoiceItem
+        items_to_add = OrderItem.objects.filter(
+            purchase_order__in=obj.orders.all(),
+            payment_method_purchase=OrderItem.PaymentMethod.PREPAID,
+            invoice_item__isnull=True,
+        )
+
+        for order_item in items_to_add:
+            InvoiceItem.objects.get_or_create(
+                invoice=obj,
+                order_item=order_item,
+                defaults={"sort_order": order_item.sort_order_purchase},
+            )
