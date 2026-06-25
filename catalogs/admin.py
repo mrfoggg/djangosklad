@@ -8,11 +8,11 @@ from unfold.admin import ModelAdmin, StackedInline, TabularInline
 from unfold.contrib.forms.widgets import WysiwygWidget
 
 from .models import (
-    BankAccount,
     Brand,
     BrandSupplier,
     Category,
     Contractor,
+    ContractorBankAccount,
     ContractorLegalDetails,
     ContractorLink,
     Organization,
@@ -38,8 +38,8 @@ class BaseCatalogAdmin(ModelAdmin):
 # --- ИНЛАЙНЫ (Вспомогательные модели внутри основных) ---
 
 
-class BankAccountInline(TabularInline):
-    model = BankAccount
+class ContractorBankAccountInline(TabularInline):
+    model = ContractorBankAccount
     extra = 1
     # Для удобства в Unfold можно использовать компактное отображение
     fields = ("bank_name", "iban", "currency")
@@ -150,7 +150,11 @@ class ContractorAdmin(BaseCatalogAdmin):
     )
 
     def get_inlines(self, request, obj=None):
-        inlines = [LegalDetailsInline, BankAccountInline, ContractorLinkInline]
+        inlines = [
+            LegalDetailsInline,
+            ContractorBankAccountInline,
+            ContractorLinkInline,
+        ]
         if obj and obj.legal_type == "HLD":
             inlines.append(SubsidiariesInline)
         if obj and obj.is_supplier:
@@ -169,11 +173,13 @@ class ContractorAdmin(BaseCatalogAdmin):
             object_id = request.resolver_match.kwargs.get("object_id")
 
             if object_id:
-                kwargs["queryset"] = BankAccount.objects.filter(contractor_id=object_id)
+                kwargs["queryset"] = ContractorBankAccount.objects.filter(
+                    contractor_id=object_id
+                )
             else:
                 # Если это создание нового контрагента (объекта еще нет),
                 # счетов быть не может
-                kwargs["queryset"] = BankAccount.objects.none()
+                kwargs["queryset"] = ContractorBankAccount.objects.none()
 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 

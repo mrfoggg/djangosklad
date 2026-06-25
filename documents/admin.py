@@ -14,7 +14,7 @@ from unfold.widgets import (
     UnfoldAdminSplitDateTimeVerticalWidget,
 )
 
-from catalogs.models import BankAccount
+from catalogs.models import ContractorBankAccount
 
 from .models import (
     CustomerOrder,
@@ -438,15 +438,15 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
                 # получаем его из базы, чтобы узнать поставщика
                 invoice = self.get_object(request, object_id)
                 if invoice and invoice.supplier:
-                    kwargs["queryset"] = BankAccount.objects.filter(
+                    kwargs["queryset"] = ContractorBankAccount.objects.filter(
                         contractor=invoice.supplier
                     )
                 else:
-                    kwargs["queryset"] = BankAccount.objects.none()
+                    kwargs["queryset"] = ContractorBankAccount.objects.none()
             else:
                 # При создании нового документа поставщик еще не выбран в БД.
                 # Список счетов будет пуст до первого сохранения.
-                kwargs["queryset"] = BankAccount.objects.none()
+                kwargs["queryset"] = ContractorBankAccount.objects.none()
 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
@@ -536,10 +536,20 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
 
 @admin.register(PaymentOrderOut)
 class PaymentOrderOutAdmin(BaseDocumentAdmin):
-    inlines = [PaymentOutItemInline]
-
+    form = DocumentForm
+    # fields = BASE_FIELDS + ("supplier", "bank_account", "total_debited")
     # Объединяем кортежи, чтобы не потерять системные поля из BaseDocumentAdmin
+    fields = BASE_FIELDS[:-1] + (
+        ("organization",),
+        (
+            "contractor",
+            "contractor_bank_account",
+        ),
+        ("amount", "bank_commission", "total_debited"),
+    )
     readonly_fields = BaseDocumentAdmin.readonly_fields + ("total_debited",)
+
+    inlines = [PaymentOutItemInline]
 
     def save_model(self, request, obj, form, change):
         # Здесь в будущем можно добавить логику проверки:

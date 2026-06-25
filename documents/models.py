@@ -348,7 +348,7 @@ class PurchaseInvoice(BaseDocumentModel):
         related_name="purchase_invoices",
     )
     bank_account = models.ForeignKey(
-        "catalogs.BankAccount",
+        "catalogs.ContractorBankAccount",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -447,8 +447,13 @@ class BaseBankPayment(BaseDocumentModel):
     amount = models.DecimalField(
         max_digits=12, decimal_places=2, verbose_name=_("Сумма")
     )
-    bank_account = models.ForeignKey(
-        "catalogs.BankAccount",
+    # our_bank_account = models.ForeignKey(
+    #     "catalogs.OurBankAccount",
+    #     on_delete=models.PROTECT,
+    #     verbose_name=_("С нашего счета"),
+    # )
+    contractor_bank_account = models.ForeignKey(
+        "catalogs.ContractorBankAccount",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

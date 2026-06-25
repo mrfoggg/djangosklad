@@ -106,7 +106,7 @@ class Contractor(BaseModel):
         help_text=_("Личный курс поставщика для конвертации цен в прайсах"),
     )
     primary_account = models.ForeignKey(
-        "BankAccount",
+        "ContractorBankAccount",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
@@ -186,33 +186,57 @@ class ContractorLegalDetails(models.Model):
         verbose_name = _("Официальные реквизиты")
 
 
-class BankAccount(BaseModel):
-    contractor = models.ForeignKey(
-        Contractor,
-        on_delete=models.CASCADE,
-        related_name="bank_accounts",
-        verbose_name=_("Контрагент"),
-    )
+class BaseBankAccount(BaseModel):
+    """Абстрактный класс для всех банковских реквизитов"""
+
     bank_name = models.CharField(max_length=255, verbose_name=_("Название банка"))
     mfo = models.CharField(max_length=6, blank=True, verbose_name=_("МФО"))
     currency = models.CharField(
         max_length=3,
         default="UAH",
         verbose_name=_("Валюта счета"),
-        help_text=_("Код валюты (UAH, USD, EUR)"),
     )
     iban = models.CharField(
         max_length=34, unique=True, verbose_name=_("IBAN"), db_index=True
     )
+    is_default = models.BooleanField(default=False, verbose_name=_("Основной счет"))
     note = models.CharField(max_length=255, blank=True, verbose_name=_("Примечание"))
 
     class Meta:
-        verbose_name = _("Банковский счет")
-        verbose_name_plural = _("Банковские счета")
-        ordering = ["bank_name"]
+        abstract = True
 
     def __str__(self):
-        return f"{self.bank_name} ({self.iban[:18]}...)"
+        return f"{self.bank_name} ({self.iban[-8:]})"
+
+
+class ContractorBankAccount(BaseBankAccount):
+    """Счета поставщиков и клиентов"""
+
+    contractor = models.ForeignKey(
+        "Contractor",
+        on_delete=models.CASCADE,
+        related_name="bank_accounts",
+        verbose_name=_("Контрагент"),
+    )
+
+    class Meta:
+        verbose_name = _("Счет контрагента")
+        verbose_name_plural = _("Счета контрагентов")
+
+
+class OurBankAccount(BaseBankAccount):
+    """Наши расчетные счета"""
+
+    organization = models.ForeignKey(
+        "Organization",
+        on_delete=models.CASCADE,
+        related_name="our_accounts",
+        verbose_name=_("Наша организация"),
+    )
+
+    class Meta:
+        verbose_name = _("Наш расчетный счет")
+        verbose_name_plural = _("Наши расчетные счета")
 
 
 class ContractorLink(models.Model):
