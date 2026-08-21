@@ -189,7 +189,7 @@ class ContractorAdmin(BaseCatalogAdmin):
         ("last_name", "first_name", "middle_name"),
         "parent_holding",
         ("is_supplier", "is_customer", "is_manufacturer"),
-        ("use_usd_prices", "usd_rate"),
+        ("use_usd_prices", "usd_rate", "default_price_type"),
         ("email", "primary_account"),
     )
 
@@ -203,6 +203,7 @@ class ContractorAdmin(BaseCatalogAdmin):
         "is_manufacturer": "is_supplier === true",
         # А поле курса показываем только если это поставщик И он использует USD-прайсы
         "usd_rate": "is_supplier === true && use_usd_prices === true",
+        "default_price_type": "is_supplier === true",
         "middle_name": "['IND', 'FOP'].includes(legal_type)",
         "first_name": "['IND', 'FOP'].includes(legal_type)",
     }

@@ -30,12 +30,16 @@ async function updateLatestPrice(productSelect, { showNotification = true } = {}
 	const documentOrganizationSelect = document.getElementById("id_organization");
 	const organizationId =
 		rowOrganizationSelect?.value || documentOrganizationSelect?.value || null;
+	const priceType = document.getElementById("id_price_type")?.value;
 
 	const url = new URL("/documents/get-price/", window.location.origin);
 	url.searchParams.append("supplier_id", partnerId);
 	url.searchParams.append("product_id", productId);
 	if (organizationId) {
 		url.searchParams.append("organization_id", organizationId);
+	}
+	if (priceType) {
+		url.searchParams.append("price_type", priceType);
 	}
 
 	try {
@@ -74,10 +78,11 @@ async function updateLatestPrice(productSelect, { showNotification = true } = {}
 document.addEventListener("change", async (event) => {
 	const isSupplierChanged = event.target?.id === "id_supplier";
 	const isDocumentOrganizationChanged = event.target?.id === "id_organization";
+	const isPriceTypeChanged = event.target?.id === "id_price_type";
 	const isRowOrganizationChanged =
 		event.target?.id.endsWith("-organization") && !isDocumentOrganizationChanged;
 
-	if (isSupplierChanged || isDocumentOrganizationChanged) {
+	if (isSupplierChanged || isDocumentOrganizationChanged || isPriceTypeChanged) {
 		const supplierId = document.getElementById("id_supplier")?.value;
 		if (!supplierId || (isSupplierChanged && !event.target.value)) {
 			return;

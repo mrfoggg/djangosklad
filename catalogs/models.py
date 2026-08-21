@@ -49,6 +49,11 @@ class Contractor(BaseModel):
         OTHER = "OTH", _("Организация (ООО, ПАО и т.д.)")
         HOLDING = "HLD", _("Холдинг / Группа компаний")  # Новый тип
 
+    class PriceType(models.TextChoices):
+        SMALL_WHOLESALE = "small_wholesale", _("Мелкий опт")
+        WHOLESALE = "wholesale", _("Опт")
+        LARGE_WHOLESALE = "large_wholesale", _("Крупный опт")
+
     legal_type = models.CharField(
         max_length=3,
         choices=LegalType.choices,
@@ -104,6 +109,12 @@ class Contractor(BaseModel):
         validators=[MinValueValidator(Decimal("0.01"))],
         verbose_name=_("Курс доллара (USD/UAH)"),
         help_text=_("Личный курс поставщика для конвертации цен в прайсах"),
+    )
+    default_price_type = models.CharField(
+        max_length=20,
+        choices=PriceType.choices,
+        default=PriceType.WHOLESALE,
+        verbose_name=_("Тип цены по умолчанию"),
     )
     primary_account = models.ForeignKey(
         "ContractorBankAccount",

@@ -77,7 +77,13 @@ class BaseDocumentAdmin(ModelAdmin):
 class SupplierPriceItemInline(TabularInline):
     model = SupplierPriceItem
     extra = 1
-    fields = ("product", "price")
+    fields = (
+        "product",
+        "small_wholesale_price",
+        "wholesale_price",
+        "large_wholesale_price",
+        "price",
+    )
     formfield_overrides = {
         MoneyField: {"widget": UnfoldAdminMoneyWidget},
     }

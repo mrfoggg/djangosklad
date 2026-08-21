@@ -3,6 +3,8 @@ from django.http import JsonResponse
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_GET
 
+from catalogs.models import Contractor
+
 from .models import SupplierPriceItem
 
 
@@ -12,9 +14,26 @@ def get_latest_price_ajax(request):
     supplier_id = request.GET.get("supplier_id")
     product_id = request.GET.get("product_id")
     organization_id = request.GET.get("organization_id")
+    requested_price_type = request.GET.get("price_type")
 
     if not supplier_id or not product_id:
         return JsonResponse({"error": "Missing parameters"}, status=400)
+
+    valid_price_types = set(Contractor.PriceType.values)
+    supplier_default_price_type = Contractor.objects.filter(
+        pk=supplier_id
+    ).values_list("default_price_type", flat=True).first()
+    price_type = (
+        requested_price_type
+        if requested_price_type in valid_price_types
+        else supplier_default_price_type or Contractor.PriceType.WHOLESALE
+    )
+    price_field_by_type = {
+        Contractor.PriceType.SMALL_WHOLESALE: "small_wholesale_price",
+        Contractor.PriceType.WHOLESALE: "wholesale_price",
+        Contractor.PriceType.LARGE_WHOLESALE: "large_wholesale_price",
+    }
+    price_field = price_field_by_type[price_type]
 
     # Исправленный запрос: убрали 'price' из select_related
     price_items = (
@@ -45,9 +64,10 @@ def get_latest_price_ajax(request):
         "message": _("Нет проведенных прайсов. Установлено значение 0."),
     }
 
-    if item and item.price:
-        source_price = item.price.amount
-        source_currency = item.price.currency.code
+    money_price = getattr(item, price_field, None) if item else None
+    if money_price is not None:
+        source_price = money_price.amount
+        source_currency = money_price.currency.code
         supplier = item.document.supplier
 
         target_price = source_price

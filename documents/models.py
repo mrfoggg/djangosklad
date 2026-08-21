@@ -8,7 +8,7 @@ from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
 from unfold.views import BaseAutocompleteView
 
-from catalogs.models import Organization
+from catalogs.models import Contractor, Organization
 
 
 def get_default_organization_id():
@@ -135,6 +135,24 @@ class SupplierPriceItem(models.Model):
         # currency_choices=AVAILABLE_CURRENCIES,
         verbose_name=_("Цена"),
     )
+    small_wholesale_price = MoneyField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        verbose_name=_("Мелкий опт"),
+    )
+    wholesale_price = MoneyField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        verbose_name=_("Опт"),
+    )
+    large_wholesale_price = MoneyField(
+        max_digits=12,
+        decimal_places=2,
+        default=0,
+        verbose_name=_("Крупный опт"),
+    )
 
     created = models.DateTimeField(
         verbose_name=_("Создан"), auto_now_add=True, db_index=True
@@ -167,6 +185,19 @@ class PurchaseOrder(BaseDocumentModel):
         help_text=_("Оставьте пустым, если в будут использоваться разные организации"),
     )
     comment = models.TextField(_("Комментарий"), blank=True)
+    price_type = models.CharField(
+        max_length=20,
+        choices=Contractor.PriceType.choices,
+        null=True,
+        blank=True,
+        verbose_name=_("Тип цены"),
+        help_text=_("Если не выбран, используется тип цены по умолчанию у поставщика"),
+    )
+
+    def save(self, *args, **kwargs):
+        if not self.price_type and self.supplier_id:
+            self.price_type = self.supplier.default_price_type
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Заказ №{self.id} поставщику {self.supplier} от {self.created.strftime('%Y-%m-%d')}"
