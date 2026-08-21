@@ -11,12 +11,13 @@ from .models import SupplierPriceItem
 def get_latest_price_ajax(request):
     supplier_id = request.GET.get("supplier_id")
     product_id = request.GET.get("product_id")
+    organization_id = request.GET.get("organization_id")
 
     if not supplier_id or not product_id:
         return JsonResponse({"error": "Missing parameters"}, status=400)
 
     # Исправленный запрос: убрали 'price' из select_related
-    item = (
+    price_items = (
         SupplierPriceItem.objects.filter(
             document__supplier_id=supplier_id,
             document__is_applied=True,
@@ -25,8 +26,16 @@ def get_latest_price_ajax(request):
         )
         .select_related("document", "document__supplier")
         .order_by("-document__dt_applied", "-id")
-        .first()
     )
+
+    # У цены для конкретной организации приоритет над общей ценой.
+    # Если для организации прайса нет, используем прайс без организации.
+    if organization_id:
+        item = price_items.filter(document__organization_id=organization_id).first()
+        if not item:
+            item = price_items.filter(document__organization__isnull=True).first()
+    else:
+        item = price_items.filter(document__organization__isnull=True).first()
 
     response_data = {
         "price": "0",

@@ -353,6 +353,7 @@ class SupplierPriceListAdmin(BaseDocumentAdmin):
     list_display = (
             "id",
             "supplier",
+            "organization",
             "is_applied",
             "to_remove",
             "created"
