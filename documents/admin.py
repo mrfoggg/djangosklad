@@ -107,16 +107,24 @@ class OrderItemInlineForm(forms.ModelForm):
             has_invoice = hasattr(instance, "invoice_item") and instance.invoice_item
 
             for name, field in self.fields.items():
-                if name not in allowed_fields:
+                # Блокируем поле, если его нет в разрешенных
+                # ИЛИ если это метод оплаты при уже выставленном счете
+                is_payment_method = name in ["payment_method_purchase", "payment_method_customer"]
+
+                if (name not in allowed_fields) or (is_payment_method and has_invoice):
                     field.disabled = True
 
-                # Дополнительная блокировка для методов оплаты:
-                # Если счет уже выставлен, менять метод оплаты нельзя (он зафиксирован как PREPAID)
-                elif (
-                    name in ["payment_method_purchase", "payment_method_customer"]
-                    and has_invoice
-                ):
-                    field.disabled = True
+            # for name, field in self.fields.items():
+            #     if name not in allowed_fields:
+            #         field.disabled = True
+
+            #     # Дополнительная блокировка для методов оплаты:
+            #     # Если счет уже выставлен, менять метод оплаты нельзя (он зафиксирован как PREPAID)
+            #     elif (
+            #         name in ["payment_method_purchase", "payment_method_customer"]
+            #         and has_invoice
+            #     ):
+            #         field.disabled = True
 
     class Meta:
         widgets = {
@@ -341,6 +349,15 @@ class PaymentOutItemInline(TabularInline):
 @admin.register(SupplierPriceList)
 class SupplierPriceListAdmin(BaseDocumentAdmin):
     form = SupplierPriceListForm
+
+    list_display = (
+            "id",
+            "supplier",
+            "is_applied",
+            "to_remove",
+            "created"
+        )
+    list_display_links = ("id", "supplier")
     list_filter = ("is_applied", "to_remove", "supplier")
     search_fields = ("id", "supplier__last_name")
     inlines = [SupplierPriceItemInline]

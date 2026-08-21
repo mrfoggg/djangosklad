@@ -13,3 +13,9 @@ dependencies = [
     "django-stubs>=6.0.3",
     "django-unfold>=0.91.0",
 ]
+
+
+[tool.ruff.lint]
+ignore = [
+    "RUF012",  # Mutable class attributes / Django pattern objects
+]

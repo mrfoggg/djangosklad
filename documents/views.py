@@ -42,7 +42,7 @@ def get_latest_price_ajax(request):
         supplier = item.document.supplier
 
         target_price = source_price
-        doc_date = (item.document.dt_applied or item.document.dt_created).strftime(
+        doc_date = (item.document.dt_applied or item.document.created).strftime(
             "%d.%m.%Y"
         )
 
