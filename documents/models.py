@@ -255,6 +255,13 @@ class OrderItem(models.Model):
     price = models.DecimalField(
         max_digits=10, decimal_places=2, verbose_name=_("Цена за единицу")
     )
+    rrp = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_("РРЦ"),
+    )
     quantity = models.DecimalField(
         max_digits=10, decimal_places=2, default=1.00, verbose_name=_("Количество")
     )

@@ -58,6 +58,7 @@ def get_latest_price_ajax(request):
 
     response_data = {
         "price": "0",
+        "rrp": "0",
         "currency": "UAH",
         "status": "info",
         "title": _("Цена не найдена"),
@@ -68,9 +69,12 @@ def get_latest_price_ajax(request):
     if money_price is not None:
         source_price = money_price.amount
         source_currency = money_price.currency.code
+        rrp_source_price = item.price.amount
+        rrp_currency = item.price.currency.code
         supplier = item.document.supplier
 
         target_price = source_price
+        target_rrp = rrp_source_price
         doc_date = (item.document.dt_applied or item.document.created).strftime(
             "%d.%m.%Y"
         )
@@ -78,7 +82,7 @@ def get_latest_price_ajax(request):
         # Подготавливаем детали для сообщения
         details = ""
 
-        if source_currency == "USD":
+        if source_currency == "USD" or rrp_currency == "USD":
             rate = getattr(supplier, "usd_rate", None)
 
             if not rate or rate <= 0:
@@ -92,6 +96,7 @@ def get_latest_price_ajax(request):
                     }
                 )
 
+        if source_currency == "USD":
             target_price = source_price * rate
             # Добавляем инфо о конвертации в скобки
             details = _(" (%(src_p)s %(src_c)s по курсу %(r)s)") % {
@@ -99,6 +104,9 @@ def get_latest_price_ajax(request):
                 "src_c": source_currency,
                 "r": rate,
             }
+
+        if rrp_currency == "USD":
+            target_rrp = rrp_source_price * rate
 
         # Формируем единый формат сообщения
         # <strong>Цена грн</strong> (детали если есть)<br>Прайс №...
@@ -114,6 +122,7 @@ def get_latest_price_ajax(request):
         response_data.update(
             {
                 "price": str(round(target_price, 2)),
+                "rrp": str(round(target_rrp, 2)),
                 "status": "success",
                 "title": _("Цена найдена"),
                 "message": message,

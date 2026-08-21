@@ -15,12 +15,37 @@ function showPriceNotification(data) {
 	});
 }
 
+function updateCustomerOrderPriceHighlight(row) {
+	if (!document.getElementById("id_customer")) {
+		return;
+	}
+
+	const priceInput = row?.querySelector('input[id$="-price"]');
+	const rrpInput = row?.querySelector('input[id$="-rrp"]');
+	if (!priceInput || !rrpInput) {
+		return;
+	}
+
+	const price = Number.parseFloat(priceInput.value.replace(",", "."));
+	const rrp = Number.parseFloat(rrpInput.value.replace(",", "."));
+	const isBelowRrp = Number.isFinite(price) && Number.isFinite(rrp) && rrp > 0 && price < rrp;
+
+	priceInput.classList.remove(
+		"bg-red-100",
+		"dark:bg-red-900/30",
+		"!bg-red-100",
+		"dark:!bg-red-900/30",
+	);
+	priceInput.style.backgroundColor = isBelowRrp ? "#7f1d1d" : "";
+}
+
 async function updateLatestPrice(productSelect, { showNotification = true } = {}) {
 	const productId = productSelect.value;
 	const partnerSelect = document.getElementById("id_supplier") || document.getElementById("id_customer");
 	const partnerId = partnerSelect?.value;
 	const row = productSelect.closest("tr, .inline-related");
 	const priceInput = row?.querySelector('input[id$="-price"]');
+	const rrpInput = row?.querySelector('input[id$="-rrp"]');
 
 	if (!partnerId || !productId || !priceInput) {
 		return { status: "skipped" };
@@ -47,6 +72,10 @@ async function updateLatestPrice(productSelect, { showNotification = true } = {}
 		const data = await response.json();
 
 		priceInput.value = data.price;
+		if (rrpInput) {
+			rrpInput.value = data.rrp;
+			rrpInput.dispatchEvent(new Event("change", { bubbles: true }));
+		}
 		const colorClass =
 			data.status === "success"
 				? "bg-green-100"
@@ -134,3 +163,27 @@ document.addEventListener("change", async (event) => {
 		}
 	}
 });
+
+document.addEventListener("input", (event) => {
+	if (event.target?.id.endsWith("-price") || event.target?.id.endsWith("-rrp")) {
+		updateCustomerOrderPriceHighlight(event.target.closest("tr, .inline-related"));
+	}
+});
+
+document.addEventListener("change", (event) => {
+	if (event.target?.id.endsWith("-price") || event.target?.id.endsWith("-rrp")) {
+		updateCustomerOrderPriceHighlight(event.target.closest("tr, .inline-related"));
+	}
+});
+
+function initializeCustomerOrderPriceHighlights() {
+	document.querySelectorAll('input[id$="-price"]').forEach((priceInput) => {
+		updateCustomerOrderPriceHighlight(priceInput.closest("tr, .inline-related"));
+	});
+}
+
+if (document.readyState === "loading") {
+	document.addEventListener("DOMContentLoaded", initializeCustomerOrderPriceHighlights);
+} else {
+	initializeCustomerOrderPriceHighlights();
+}

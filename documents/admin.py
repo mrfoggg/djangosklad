@@ -144,6 +144,11 @@ class OrderItemInlineForm(forms.ModelForm):
                     "style": "width: 120px;",  # Жесткая фиксация
                 }
             ),
+            "rrp": UnfoldAdminDecimalFieldWidget(
+                attrs={
+                    "style": "width: 120px;",
+                }
+            ),
             "quantity": UnfoldAdminDecimalFieldWidget(
                 attrs={
                     "style": "width: 90px;",  # Жесткая фиксация
@@ -197,6 +202,7 @@ class PurchaseOrderItemInline(TabularInline):
         "sort_order_purchase",
         "product",
         "price",
+        "rrp",
         "quantity",
         "total_price",
         "organization",
@@ -234,6 +240,7 @@ class CustomeOrderItemInline(TabularInline):
         "sort_order_customer",
         "product",
         "price",
+        "rrp",
         "quantity",
         "total_price",
         "purchase_order",
