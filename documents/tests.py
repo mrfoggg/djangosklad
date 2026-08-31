@@ -23,11 +23,7 @@ from .models import (
 
 
 class OrderItemPaymentMethodTests(TestCase):
-    def test_purchase_and_customer_payment_choices_are_separate(self):
-        self.assertEqual(
-            list(OrderItem.PurchasePaymentMethod.labels),
-            ["Предоплата", "Отсрочка платежа"],
-        )
+    def test_customer_payment_choices(self):
         self.assertEqual(
             list(OrderItem.CustomerPaymentMethod.labels),
             ["Оплата по счету", "Постоплата"],

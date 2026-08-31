@@ -127,32 +127,24 @@ class OrderItemInlineForm(forms.ModelForm):
             allowed_fields = [
                 "sort_order_purchase",
                 "sort_order_customer",
-                "payment_method_purchase",
                 "payment_method_customer",
             ]
 
             # Проверяем, существует ли уже связанный счет
-            has_invoice = hasattr(instance, "invoice_item") and instance.invoice_item
+            has_invoice = (
+                hasattr(instance, "invoice_item") and instance.invoice_item
+            ) or (
+                hasattr(instance, "sales_invoice_item")
+                and instance.sales_invoice_item
+            )
 
             for name, field in self.fields.items():
                 # Блокируем поле, если его нет в разрешенных
                 # ИЛИ если это метод оплаты при уже выставленном счете
-                is_payment_method = name in ["payment_method_purchase", "payment_method_customer"]
+                is_payment_method = name == "payment_method_customer"
 
                 if (name not in allowed_fields) or (is_payment_method and has_invoice):
                     field.disabled = True
-
-            # for name, field in self.fields.items():
-            #     if name not in allowed_fields:
-            #         field.disabled = True
-
-            #     # Дополнительная блокировка для методов оплаты:
-            #     # Если счет уже выставлен, менять метод оплаты нельзя (он зафиксирован как PREPAID)
-            #     elif (
-            #         name in ["payment_method_purchase", "payment_method_customer"]
-            #         and has_invoice
-            #     ):
-            #         field.disabled = True
 
     class Meta:
         widgets = {
@@ -235,7 +227,6 @@ class PurchaseOrderItemInline(TabularInline):
         "organization",
         "customer_order",
         "warehouse",
-        "payment_method_purchase",
         "get_invoice_link",
     )
     ordering = ("sort_order_purchase",)
@@ -339,9 +330,6 @@ class InvoiceItemInline(TabularInline):
                     # 2. Базовые фильтры айтемов
                     item_filters = Q(
                         purchase_order_id__in=selected_order_ids,
-                        payment_method_purchase=(
-                            OrderItem.PurchasePaymentMethod.PREPAYMENT
-                        ),
                     )
 
                     # 3. Условие "свободности" (нет счета или привязан к текущему)
@@ -603,7 +591,7 @@ class PurchaseInvoiceForm(DocumentForm):
         required=False,
         initial=False,
         help_text=_(
-            "Автоматически добавит все недостающие PREPAID позиции из выбранных заказов"
+            "Автоматически добавит все доступные позиции из выбранных заказов"
         ),
     )
 
@@ -656,7 +644,7 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
         Фильтр заказов-оснований:
         - Поставщик/Холдинг
         - Статус 'Проведен'
-        - Наличие айтемов PREPAID без счета
+        - Наличие позиций без счета
         - Организация айтемов совпадает с организацией счета
         """
         if db_field.name == "orders":
@@ -671,15 +659,11 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
 
                     # 2. Фильтр по айтемам с учетом организации
                     # Нам нужны заказы, где есть хотя бы один айтем:
-                    # - со способом PREPAID
                     # - без привязанного счета
                     # - организация которого совпадает с организацией счета (если она там указана)
 
-                    item_filters = Q(
-                        items__payment_method_purchase=(
-                            OrderItem.PurchasePaymentMethod.PREPAYMENT
-                        ),
-                        items__invoice_item__isnull=True,
+                    item_filters = Q(items__invoice_item__isnull=True) | Q(
+                        items__invoice_item__invoice=invoice
                     )
 
                     # Если в счете указана организация, фильтруем заказы,
@@ -709,7 +693,6 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
         """Логика автоматического наполнения позиций счета с учетом организации"""
         filters = Q(
             purchase_order__in=obj.orders.all(),
-            payment_method_purchase=OrderItem.PurchasePaymentMethod.PREPAYMENT,
             invoice_item__isnull=True,
         )
 

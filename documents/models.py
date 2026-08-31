@@ -309,10 +309,6 @@ class CustomerOrder(BaseDocumentModel):
 class OrderItem(models.Model):
     """Строка товара, универсальная для закупок и продаж. Позволяет реализовать механим резервирования"""
 
-    class PurchasePaymentMethod(models.TextChoices):
-        PREPAYMENT = "prepaid", _("Предоплата")
-        DEFERRED = "postpaid", _("Отсрочка платежа")
-
     class CustomerPaymentMethod(models.TextChoices):
         PREPAID = "prepaid", _("Оплата по счету")
         POSTPAID = "postpaid", _("Постоплата")
@@ -421,14 +417,6 @@ class OrderItem(models.Model):
         verbose_name=_("Создан"), auto_now_add=True, db_index=True
     )
     updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
-
-    # Условия оплаты для НАС (поставщику)
-    payment_method_purchase = models.CharField(
-        max_length=20,
-        choices=PurchasePaymentMethod.choices,
-        default=PurchasePaymentMethod.PREPAYMENT,
-        verbose_name=_("Оплата поставщику"),
-    )
 
     # Условия оплаты для КЛИЕНТА (нам)
     payment_method_customer = models.CharField(
