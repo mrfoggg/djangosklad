@@ -3,7 +3,7 @@ from django.http import JsonResponse
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_GET
 
-from catalogs.models import Contractor
+from catalogs.models import Contractor, Product
 
 from .models import PurchaseOrder, RetailPriceItem, SupplierPriceItem
 
@@ -16,6 +16,7 @@ def get_latest_price_ajax(request):
     organization_id = request.GET.get("organization_id")
     requested_price_type = request.GET.get("price_type")
     purchase_order_id = request.GET.get("purchase_order_id")
+    use_main_supplier = request.GET.get("use_main_supplier") == "1"
 
     if purchase_order_id:
         purchase_order = PurchaseOrder.objects.filter(pk=purchase_order_id).first()
@@ -25,6 +26,28 @@ def get_latest_price_ajax(request):
         supplier_id = purchase_order.supplier_id
         organization_id = purchase_order.organization_id
         requested_price_type = purchase_order.price_type
+
+    if use_main_supplier:
+        product = (
+            Product.objects.filter(pk=product_id)
+            .select_related("main_supplier__supplier")
+            .first()
+        )
+        if not product:
+            return JsonResponse({"error": "Product not found"}, status=404)
+        if not product.main_supplier_id:
+            return JsonResponse(
+                {
+                    "price": "0",
+                    "rrp": "0",
+                    "currency": "UAH",
+                    "status": "info",
+                    "title": _("Основной поставщик не задан"),
+                    "message": _("У товара не выбран основной поставщик."),
+                    "supplier": "",
+                }
+            )
+        supplier_id = product.main_supplier.supplier_id
 
     if not supplier_id or not product_id:
         return JsonResponse({"error": "Missing parameters"}, status=400)
@@ -73,6 +96,7 @@ def get_latest_price_ajax(request):
         "status": "info",
         "title": _("Цена не найдена"),
         "message": _("Нет проведенных прайсов. Установлено значение 0."),
+        "supplier": "",
     }
 
     money_price = getattr(item, price_field, None) if item else None
@@ -136,6 +160,7 @@ def get_latest_price_ajax(request):
                 "status": "success",
                 "title": _("Цена найдена"),
                 "message": message,
+                "supplier": str(supplier),
             }
         )
 

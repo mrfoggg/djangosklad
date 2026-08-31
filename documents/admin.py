@@ -94,10 +94,19 @@ class SupplierPriceItemInline(TabularInline):
 class RetailPriceItemInline(TabularInline):
     model = RetailPriceItem
     extra = 1
-    fields = ("product", "price")
+    fields = ("product", "price", "supplier_price_info")
+    readonly_fields = ("supplier_price_info",)
     formfield_overrides = {
         MoneyField: {"widget": UnfoldAdminMoneyWidget},
     }
+
+    @admin.display(description=_("Прайс основного поставщика"))
+    def supplier_price_info(self, obj):
+        return format_html(
+            '<div class="supplier-price-info text-sm whitespace-nowrap" '
+            'data-purchase-price="" data-rrp="">{}</div>',
+            _("Выберите товар"),
+        )
 
 
 class OrderItemInlineForm(forms.ModelForm):
@@ -417,6 +426,9 @@ class RetailPriceListAdmin(BaseDocumentAdmin):
     inlines = [RetailPriceItemInline]
     fields = BASE_FIELDS + ("retail_store", "comment")
     readonly_fields = BASE_READONLY
+
+    class Media:
+        js = ["documents/js/admin_retail_price_info.js"]
 
 
 class PurchaseOrderForm(DocumentForm):
