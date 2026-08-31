@@ -24,6 +24,8 @@ from .models import (
     PaymentOutItem,
     PurchaseInvoice,
     PurchaseOrder,
+    RetailPriceItem,
+    RetailPriceList,
     SupplierPriceItem,
     SupplierPriceList,
 )
@@ -84,6 +86,15 @@ class SupplierPriceItemInline(TabularInline):
         "large_wholesale_price",
         "price",
     )
+    formfield_overrides = {
+        MoneyField: {"widget": UnfoldAdminMoneyWidget},
+    }
+
+
+class RetailPriceItemInline(TabularInline):
+    model = RetailPriceItem
+    extra = 1
+    fields = ("product", "price")
     formfield_overrides = {
         MoneyField: {"widget": UnfoldAdminMoneyWidget},
     }
@@ -350,6 +361,12 @@ class SupplierPriceListForm(DocumentForm):
         fields = "__all__"
 
 
+class RetailPriceListForm(DocumentForm):
+    class Meta:
+        model = RetailPriceList
+        fields = "__all__"
+
+
 class PaymentOutItemInline(TabularInline):
     model = PaymentOutItem
     extra = 1
@@ -376,6 +393,25 @@ class SupplierPriceListAdmin(BaseDocumentAdmin):
     search_fields = ("id", "supplier__last_name")
     inlines = [SupplierPriceItemInline]
     fields = BASE_FIELDS + ("supplier",)
+    readonly_fields = BASE_READONLY
+
+
+@admin.register(RetailPriceList)
+class RetailPriceListAdmin(BaseDocumentAdmin):
+    form = RetailPriceListForm
+    list_display = (
+        "id",
+        "retail_store",
+        "organization",
+        "is_applied",
+        "to_remove",
+        "created",
+    )
+    list_display_links = ("id", "retail_store")
+    list_filter = ("is_applied", "to_remove", "retail_store")
+    search_fields = ("id", "retail_store__name")
+    inlines = [RetailPriceItemInline]
+    fields = BASE_FIELDS + ("retail_store", "comment")
     readonly_fields = BASE_READONLY
 
 

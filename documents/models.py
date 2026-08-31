@@ -164,6 +164,58 @@ class SupplierPriceItem(models.Model):
         verbose_name_plural = _("Позиции прайса")
 
 
+class RetailPriceList(BaseDocumentModel):
+    retail_store = models.ForeignKey(
+        "catalogs.RetailStore",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="price_lists",
+        verbose_name=_("Розничный магазин"),
+        help_text=_("Оставьте пустым, если прайс действует для всех магазинов"),
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_("Организация"),
+        help_text=_("Оставьте пустым, если цена общая для всех организаций"),
+    )
+    comment = models.TextField(_("Комментарий"), blank=True)
+
+    class Meta(BaseDocumentModel.Meta):
+        verbose_name = _("Установка розничных цен")
+        verbose_name_plural = _("Установки розничных цен")
+
+
+class RetailPriceItem(models.Model):
+    document = models.ForeignKey(
+        "RetailPriceList",
+        on_delete=models.CASCADE,
+        related_name="items",
+        verbose_name=_("Документ"),
+    )
+    product = models.ForeignKey(
+        "catalogs.Product",
+        on_delete=models.PROTECT,
+        verbose_name=_("Товар"),
+    )
+    price = MoneyField(
+        max_digits=12,
+        decimal_places=2,
+        verbose_name=_("Розничная цена"),
+    )
+    created = models.DateTimeField(
+        verbose_name=_("Создан"), auto_now_add=True, db_index=True
+    )
+    updated = models.DateTimeField(verbose_name=_("Изменен"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("Позиция розничного прайса")
+        verbose_name_plural = _("Позиции розничного прайса")
+
+
 class PurchaseOrder(BaseDocumentModel):
     """
     Документ: Заказ поставщику.
