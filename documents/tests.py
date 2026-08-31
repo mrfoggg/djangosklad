@@ -6,7 +6,19 @@ from djmoney.money import Money
 from catalogs.models import Contractor, Product, ProductSupplier
 
 from .admin import PurchaseInvoiceItemInlineForm
-from .models import InvoiceItem, SupplierPriceItem, SupplierPriceList
+from .models import InvoiceItem, OrderItem, SupplierPriceItem, SupplierPriceList
+
+
+class OrderItemPaymentMethodTests(TestCase):
+    def test_purchase_and_customer_payment_choices_are_separate(self):
+        self.assertEqual(
+            list(OrderItem.PurchasePaymentMethod.labels),
+            ["Предоплата", "Отсрочка платежа"],
+        )
+        self.assertEqual(
+            list(OrderItem.CustomerPaymentMethod.labels),
+            ["Оплата по счету", "Постоплата"],
+        )
 
 
 class PurchaseInvoiceItemInlineFormTests(TestCase):

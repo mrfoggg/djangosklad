@@ -337,7 +337,9 @@ class InvoiceItemInline(TabularInline):
                     # 2. Базовые фильтры айтемов
                     item_filters = Q(
                         purchase_order_id__in=selected_order_ids,
-                        payment_method_purchase=OrderItem.PaymentMethod.PREPAID,
+                        payment_method_purchase=(
+                            OrderItem.PurchasePaymentMethod.PREPAYMENT
+                        ),
                     )
 
                     # 3. Условие "свободности" (нет счета или привязан к текущему)
@@ -576,7 +578,9 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
                     # - организация которого совпадает с организацией счета (если она там указана)
 
                     item_filters = Q(
-                        items__payment_method_purchase=OrderItem.PaymentMethod.PREPAID,
+                        items__payment_method_purchase=(
+                            OrderItem.PurchasePaymentMethod.PREPAYMENT
+                        ),
                         items__invoice_item__isnull=True,
                     )
 
@@ -607,7 +611,7 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
         """Логика автоматического наполнения позиций счета с учетом организации"""
         filters = Q(
             purchase_order__in=obj.orders.all(),
-            payment_method_purchase=OrderItem.PaymentMethod.PREPAID,
+            payment_method_purchase=OrderItem.PurchasePaymentMethod.PREPAYMENT,
             invoice_item__isnull=True,
         )
 
