@@ -285,9 +285,6 @@ class PurchaseInvoiceItemInlineForm(forms.ModelForm):
             # фиксируется и больше не может быть подменена через админку.
             if self.instance and self.instance.pk:
                 order_item_field.disabled = True
-                order_item_field.queryset = order_item_field.queryset.filter(
-                    pk=self.instance.order_item_id
-                )
             else:
                 # В новой позиции не предлагаем строки заказов, которые уже
                 # добавлены в любой входящий счет.
@@ -327,22 +324,21 @@ class InvoiceItemInline(TabularInline):
                     # 1. Берем ID всех заказов, выбранных в "основаниях"
                     selected_order_ids = invoice.orders.values_list("id", flat=True)
 
-                    # 2. Базовые фильтры айтемов
-                    item_filters = Q(
+                    # Ограничения по заказам-основаниям и организации нужны
+                    # только для выбора новой позиции счета.
+                    new_item_filters = Q(
                         purchase_order_id__in=selected_order_ids,
+                        invoice_item__isnull=True,
                     )
-
-                    # 3. Условие "свободности" (нет счета или привязан к текущему)
-                    availability_filter = Q(invoice_item__isnull=True) | Q(
-                        invoice_item__invoice=invoice
-                    )
-
-                    # 4. Фильтр по организации (если в инвойсе она задана)
                     if invoice.organization:
-                        item_filters &= Q(organization=invoice.organization)
+                        new_item_filters &= Q(organization=invoice.organization)
 
+                    # Уже записанные позиции текущего счета должны корректно
+                    # отображаться независимо от последующих изменений списка
+                    # заказов-оснований или организации строки заказа.
+                    current_invoice_items = Q(invoice_item__invoice=invoice)
                     kwargs["queryset"] = OrderItem.objects.filter(
-                        item_filters, availability_filter
+                        new_item_filters | current_invoice_items
                     ).distinct()
                 else:
                     kwargs["queryset"] = OrderItem.objects.none()

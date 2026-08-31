@@ -46,10 +46,7 @@ class PurchaseInvoiceItemInlineFormTests(TestCase):
         )
 
         self.assertTrue(form.fields["order_item"].disabled)
-        self.assertEqual(
-            form.fields["order_item"].queryset.query.where.children[0].rhs,
-            42,
-        )
+        self.assertFalse(form.fields["order_item"].queryset.query.where.children)
 
 
 class SalesInvoiceTests(TestCase):
