@@ -94,10 +94,19 @@ class SupplierPriceItemInline(TabularInline):
 class RetailPriceItemInline(TabularInline):
     model = RetailPriceItem
     extra = 1
-    fields = ("product", "price")
+    fields = ("product", "price", "supplier_price_info")
+    readonly_fields = ("supplier_price_info",)
     formfield_overrides = {
         MoneyField: {"widget": UnfoldAdminMoneyWidget},
     }
+
+    @admin.display(description=_("Прайс основного поставщика"))
+    def supplier_price_info(self, obj):
+        return format_html(
+            '<div class="supplier-price-info text-sm whitespace-nowrap" '
+            'data-purchase-price="" data-rrp="">{}</div>',
+            _("Выберите товар"),
+        )
 
 
 class OrderItemInlineForm(forms.ModelForm):
@@ -150,7 +159,12 @@ class OrderItemInlineForm(forms.ModelForm):
                     "style": "width: 250px;",  # Жесткая фиксация
                 }
             ),
-            "price": UnfoldAdminDecimalFieldWidget(
+            "purchase_price": UnfoldAdminDecimalFieldWidget(
+                attrs={
+                    "style": "width: 120px;",
+                }
+            ),
+            "customer_price": UnfoldAdminDecimalFieldWidget(
                 attrs={
                     "style": "width: 120px;",  # Жесткая фиксация
                 }
@@ -212,10 +226,10 @@ class PurchaseOrderItemInline(TabularInline):
     fields = (
         "sort_order_purchase",
         "product",
-        "price",
+        "purchase_price",
         "rrp",
         "quantity",
-        "total_price",
+        "purchase_total_price",
         "organization",
         "customer_order",
         "warehouse",
@@ -223,7 +237,7 @@ class PurchaseOrderItemInline(TabularInline):
         "get_invoice_link",
     )
     ordering = ("sort_order_purchase",)
-    readonly_fields = ("total_price", "get_invoice_link")
+    readonly_fields = ("purchase_total_price", "get_invoice_link")
 
     @admin.display(description=_("Счет"))
     def get_invoice_link(self, obj):
@@ -250,16 +264,17 @@ class CustomeOrderItemInline(TabularInline):
     fields = (
         "sort_order_customer",
         "product",
-        "price",
+        "customer_price",
+        "purchase_price",
         "rrp",
         "quantity",
-        "total_price",
+        "customer_total_price",
         "purchase_order",
         "warehouse",
         "payment_method_customer",
     )
     ordering = ("sort_order_customer",)
-    readonly_fields = ("total_price",)
+    readonly_fields = ("customer_total_price",)
 
 
 class PurchaseInvoiceItemInlineForm(forms.ModelForm):
@@ -346,13 +361,11 @@ class InvoiceItemInline(TabularInline):
 
     @admin.display(description=_("Цена"))
     def get_price(self, obj):
-        # Используем твой DecimalField из OrderItem
-        return obj.order_item.price if obj.order_item else "-"
+        return obj.order_item.purchase_price if obj.order_item else "-"
 
     @admin.display(description=_("Сумма"))
     def get_total(self, obj):
-        # Используем твой GeneratedField из OrderItem
-        return obj.order_item.total_price if obj.order_item else "-"
+        return obj.order_item.purchase_total_price if obj.order_item else "-"
 
 
 class SupplierPriceListForm(DocumentForm):
@@ -413,6 +426,9 @@ class RetailPriceListAdmin(BaseDocumentAdmin):
     inlines = [RetailPriceItemInline]
     fields = BASE_FIELDS + ("retail_store", "comment")
     readonly_fields = BASE_READONLY
+
+    class Media:
+        js = ["documents/js/admin_retail_price_info.js"]
 
 
 class PurchaseOrderForm(DocumentForm):

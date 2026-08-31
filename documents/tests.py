@@ -1,3 +1,66 @@
+from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
+from djmoney.money import Money
 
-# Create your tests here.
+from catalogs.models import Contractor, Product, ProductSupplier
+
+from .models import SupplierPriceItem, SupplierPriceList
+
+
+class MainSupplierPriceAjaxTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_superuser(
+            username="admin", password="test-password"
+        )
+        cls.supplier = Contractor.objects.create(
+            last_name="Тестовый поставщик",
+            default_price_type=Contractor.PriceType.WHOLESALE,
+        )
+        cls.product = Product.objects.create(name="Тестовый товар", sku="test-product")
+        product_supplier = ProductSupplier.objects.create(
+            product=cls.product,
+            supplier=cls.supplier,
+        )
+        cls.product.main_supplier = product_supplier
+        cls.product.save()
+        price_list = SupplierPriceList.objects.create(
+            supplier=cls.supplier,
+            is_applied=True,
+        )
+        SupplierPriceItem.objects.create(
+            document=price_list,
+            product=cls.product,
+            price=Money("150.00", "UAH"),
+            small_wholesale_price=Money("110.00", "UAH"),
+            wholesale_price=Money("100.00", "UAH"),
+            large_wholesale_price=Money("90.00", "UAH"),
+        )
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def test_uses_products_main_supplier_and_its_default_price_type(self):
+        response = self.client.get(
+            reverse("get_latest_price"),
+            {"product_id": self.product.pk, "use_main_supplier": "1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "success")
+        self.assertEqual(response.json()["price"], "100.00")
+        self.assertEqual(response.json()["rrp"], "150.00")
+        self.assertEqual(response.json()["supplier"], str(self.supplier))
+
+    def test_returns_information_when_product_has_no_main_supplier(self):
+        product = Product.objects.create(name="Без поставщика", sku="without-supplier")
+
+        response = self.client.get(
+            reverse("get_latest_price"),
+            {"product_id": product.pk, "use_main_supplier": "1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "info")
+        self.assertEqual(response.json()["price"], "0")

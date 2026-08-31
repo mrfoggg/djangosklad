@@ -319,9 +319,20 @@ class OrderItem(models.Model):
         related_name="order_items",
         verbose_name=_("Товар"),
     )
-    # КОЛИЧЕСТВО И ЦЕНА
-    price = models.DecimalField(
-        max_digits=10, decimal_places=2, verbose_name=_("Цена за единицу")
+    # КОЛИЧЕСТВО И ЦЕНЫ
+    purchase_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_("Закупочная цена"),
+    )
+    customer_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_("Цена продажи"),
     )
     rrp = models.DecimalField(
         max_digits=10,
@@ -333,12 +344,18 @@ class OrderItem(models.Model):
     quantity = models.DecimalField(
         max_digits=10, decimal_places=2, default=1.00, verbose_name=_("Количество")
     )
-    # ВЫЧИСЛЯЕМОЕ ПОЛЕ
-    total_price = models.GeneratedField(
-        expression=F("quantity") * F("price"),
-        output_field=models.DecimalField(max_digits=10, decimal_places=2),
+    # ВЫЧИСЛЯЕМЫЕ СУММЫ
+    purchase_total_price = models.GeneratedField(
+        expression=F("quantity") * F("purchase_price"),
+        output_field=models.DecimalField(max_digits=10, decimal_places=2, null=True),
         db_persist=True,
-        verbose_name=_("Сумма"),
+        verbose_name=_("Сумма закупки"),
+    )
+    customer_total_price = models.GeneratedField(
+        expression=F("quantity") * F("customer_price"),
+        output_field=models.DecimalField(max_digits=10, decimal_places=2, null=True),
+        db_persist=True,
+        verbose_name=_("Сумма продажи"),
     )
     # СВЯЗИ С ЗАКАЗАМИ И СКЛАДОМ
     purchase_order = models.ForeignKey(
