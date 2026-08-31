@@ -18,6 +18,7 @@ from .models import (
     Organization,
     Product,
     ProductSupplier,
+    RetailStore,
     Settlement,
     SettlementType,
     Warehouse,
@@ -356,3 +357,9 @@ class WarehouseAdmin(BaseCatalogAdmin):
     list_display = ["name", "settlement", "is_virtual"]
     list_filter = ["is_virtual", "settlement"]
     search_fields = ["name"]
+
+
+@admin.register(RetailStore)
+class RetailStoreAdmin(BaseCatalogAdmin):
+    list_display = ("name", "url", "description")
+    search_fields = ("name", "description")

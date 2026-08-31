@@ -568,3 +568,28 @@ class Warehouse(BaseModel):
             raise ValidationError(
                 {"settlement": _("Населенный пункт обязателен для физического склада.")}
             )
+
+
+class RetailStore(BaseModel):
+    name = models.CharField(
+        max_length=255,
+        unique=True,
+        verbose_name=_("Название"),
+    )
+    url = models.URLField(
+        blank=True,
+        verbose_name=_("URL"),
+    )
+    description = models.CharField(
+        max_length=255,
+        blank=True,
+        verbose_name=_("Описание"),
+    )
+
+    class Meta:
+        verbose_name = _("Розничный магазин")
+        verbose_name_plural = _("Розничные магазины")
+        ordering = ("name",)
+
+    def __str__(self):
+        return self.name
