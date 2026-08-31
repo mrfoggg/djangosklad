@@ -278,11 +278,29 @@ class CustomeOrderItemInline(TabularInline):
 
 
 class PurchaseInvoiceItemInlineForm(forms.ModelForm):
+    class Meta:
+        model = InvoiceItem
+        fields = "__all__"
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if "order_item" in self.fields:
             # Переопределяем отображение каждой строки в выпадающем списке
-            self.fields["order_item"].label_from_instance = self.label_for_purchase
+            order_item_field = self.fields["order_item"]
+            order_item_field.label_from_instance = self.label_for_purchase
+            # После первого сохранения связь позиции счета со строкой заказа
+            # фиксируется и больше не может быть подменена через админку.
+            if self.instance and self.instance.pk:
+                order_item_field.disabled = True
+                order_item_field.queryset = order_item_field.queryset.filter(
+                    pk=self.instance.order_item_id
+                )
+            else:
+                # В новой позиции не предлагаем строки заказов, которые уже
+                # добавлены в любой входящий счет.
+                order_item_field.queryset = order_item_field.queryset.filter(
+                    invoice_item__isnull=True
+                )
 
     def label_for_purchase(self, obj):
         # Формируем строку: Заказ №X | Товар | Кол-во

@@ -5,7 +5,30 @@ from djmoney.money import Money
 
 from catalogs.models import Contractor, Product, ProductSupplier
 
-from .models import SupplierPriceItem, SupplierPriceList
+from .admin import PurchaseInvoiceItemInlineForm
+from .models import InvoiceItem, SupplierPriceItem, SupplierPriceList
+
+
+class PurchaseInvoiceItemInlineFormTests(TestCase):
+    def test_order_item_is_editable_for_new_invoice_item(self):
+        form = PurchaseInvoiceItemInlineForm(instance=InvoiceItem())
+
+        self.assertFalse(form.fields["order_item"].disabled)
+        self.assertIn(
+            "invoiceitem",
+            str(form.fields["order_item"].queryset.query).lower(),
+        )
+
+    def test_order_item_is_disabled_after_invoice_item_is_saved(self):
+        form = PurchaseInvoiceItemInlineForm(
+            instance=InvoiceItem(pk=1, order_item_id=42)
+        )
+
+        self.assertTrue(form.fields["order_item"].disabled)
+        self.assertEqual(
+            form.fields["order_item"].queryset.query.where.children[0].rhs,
+            42,
+        )
 
 
 class MainSupplierPriceAjaxTests(TestCase):
