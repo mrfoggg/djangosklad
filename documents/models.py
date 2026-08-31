@@ -558,6 +558,109 @@ class InvoiceItem(models.Model):
         return f"{self.invoice.id} [# {self.sort_order}] <- {self.order_item}"
 
 
+class SalesInvoice(BaseDocumentModel):
+    customer = models.ForeignKey(
+        "catalogs.Contractor",
+        on_delete=models.PROTECT,
+        limit_choices_to={"is_customer": True},
+        related_name="sales_invoices",
+        verbose_name=_("Покупатель"),
+    )
+    bank_account = models.ForeignKey(
+        "catalogs.OurBankAccount",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="sales_invoices",
+        verbose_name=_("Счет для оплаты"),
+    )
+    note = models.CharField(_("Примечание"), max_length=255, blank=True)
+    orders = models.ManyToManyField(
+        "CustomerOrder",
+        related_name="sales_invoices",
+        blank=True,
+        verbose_name=_("Основание: Заказы покупателей"),
+        help_text=_(
+            "Используется для выбора доступных позиций. "
+            "Фактическая связь устанавливается на уровне строк счета."
+        ),
+    )
+
+    def clean(self):
+        super().clean()
+        if (
+            self.bank_account_id
+            and self.organization_id
+            and self.bank_account.organization_id != self.organization_id
+        ):
+            raise ValidationError(
+                {"bank_account": _("Банковский счет относится к другой организации.")}
+            )
+        if not self.is_applied or self.bank_account_id or not self.organization_id:
+            return
+
+        accounts = self.organization.our_accounts.all()
+        if accounts.filter(is_default=True).exists():
+            return
+        if not accounts.exists():
+            raise ValidationError(
+                {
+                    "is_applied": _(
+                        "Невозможно провести счет — у организации нет банковского счета."
+                    )
+                }
+            )
+        raise ValidationError(
+            {
+                "bank_account": _(
+                    "У организации есть банковские счета, но основной счет не выбран. "
+                    "Выберите счет вручную или установите основной счет."
+                )
+            }
+        )
+
+    def save(self, *args, **kwargs):
+        if not self.bank_account_id and self.organization_id:
+            self.bank_account = self.organization.our_accounts.filter(
+                is_default=True
+            ).first()
+        super().save(*args, **kwargs)
+
+    class Meta:
+        verbose_name = _("Счет на оплату")
+        verbose_name_plural = _("Счета на оплату")
+
+
+class SalesInvoiceItem(models.Model):
+    invoice = models.ForeignKey(
+        SalesInvoice,
+        on_delete=models.CASCADE,
+        related_name="items",
+        verbose_name=_("Счет на оплату"),
+    )
+    order_item = models.OneToOneField(
+        OrderItem,
+        on_delete=models.PROTECT,
+        related_name="sales_invoice_item",
+        verbose_name=_("Строка заказа"),
+    )
+    sort_order = models.PositiveIntegerField(
+        default=0,
+        blank=True,
+        null=True,
+        db_index=True,
+        verbose_name=_("Порядок"),
+    )
+
+    class Meta:
+        verbose_name = _("Позиция счета на оплату")
+        verbose_name_plural = _("Позиции счета на оплату")
+        ordering = ["sort_order"]
+
+    def __str__(self):
+        return f"{self.invoice.id} [# {self.sort_order}] <- {self.order_item}"
+
+
 class BaseBankPayment(BaseDocumentModel):
     """Абстрактный класс для всех банковских платежей"""
 

@@ -3,10 +3,23 @@ from django.test import TestCase
 from django.urls import reverse
 from djmoney.money import Money
 
-from catalogs.models import Contractor, Product, ProductSupplier
+from catalogs.models import (
+    Contractor,
+    Organization,
+    OurBankAccount,
+    Product,
+    ProductSupplier,
+)
 
-from .admin import PurchaseInvoiceItemInlineForm
-from .models import InvoiceItem, OrderItem, SupplierPriceItem, SupplierPriceList
+from .admin import PurchaseInvoiceItemInlineForm, SalesInvoiceItemInlineForm
+from .models import (
+    InvoiceItem,
+    OrderItem,
+    SalesInvoice,
+    SalesInvoiceItem,
+    SupplierPriceItem,
+    SupplierPriceList,
+)
 
 
 class OrderItemPaymentMethodTests(TestCase):
@@ -34,6 +47,38 @@ class PurchaseInvoiceItemInlineFormTests(TestCase):
     def test_order_item_is_disabled_after_invoice_item_is_saved(self):
         form = PurchaseInvoiceItemInlineForm(
             instance=InvoiceItem(pk=1, order_item_id=42)
+        )
+
+        self.assertTrue(form.fields["order_item"].disabled)
+        self.assertEqual(
+            form.fields["order_item"].queryset.query.where.children[0].rhs,
+            42,
+        )
+
+
+class SalesInvoiceTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.organization = Organization.objects.create(name="Организация счета")
+        cls.customer = Contractor.objects.create(last_name="Покупатель")
+        cls.bank_account = OurBankAccount.objects.create(
+            organization=cls.organization,
+            bank_name="Банк",
+            iban="UA123456789012345678901234567",
+            is_default=True,
+        )
+
+    def test_default_organization_bank_account_is_selected(self):
+        invoice = SalesInvoice.objects.create(
+            organization=self.organization,
+            customer=self.customer,
+        )
+
+        self.assertEqual(invoice.bank_account, self.bank_account)
+
+    def test_order_item_is_locked_after_sales_invoice_item_is_saved(self):
+        form = SalesInvoiceItemInlineForm(
+            instance=SalesInvoiceItem(pk=1, order_item_id=42)
         )
 
         self.assertTrue(form.fields["order_item"].disabled)

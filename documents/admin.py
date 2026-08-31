@@ -14,7 +14,7 @@ from unfold.widgets import (
     UnfoldAdminSplitDateTimeVerticalWidget,
 )
 
-from catalogs.models import ContractorBankAccount
+from catalogs.models import ContractorBankAccount, OurBankAccount
 
 from .models import (
     CustomerOrder,
@@ -26,6 +26,8 @@ from .models import (
     PurchaseOrder,
     RetailPriceItem,
     RetailPriceList,
+    SalesInvoice,
+    SalesInvoiceItem,
     SupplierPriceItem,
     SupplierPriceList,
 )
@@ -388,6 +390,102 @@ class InvoiceItemInline(TabularInline):
         return obj.order_item.purchase_total_price if obj.order_item else "-"
 
 
+class SalesInvoiceItemInlineForm(forms.ModelForm):
+    class Meta:
+        model = SalesInvoiceItem
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "order_item" not in self.fields:
+            return
+
+        order_item_field = self.fields["order_item"]
+        order_item_field.label_from_instance = self.label_for_customer
+        if self.instance and self.instance.pk:
+            order_item_field.disabled = True
+            order_item_field.queryset = order_item_field.queryset.filter(
+                pk=self.instance.order_item_id
+            )
+        else:
+            order_item_field.queryset = order_item_field.queryset.filter(
+                sales_invoice_item__isnull=True
+            )
+
+    def label_for_customer(self, obj):
+        order_no = obj.customer_order.id if obj.customer_order else "???"
+        order_dt = obj.customer_order.dt_applied if obj.customer_order else "???"
+        return f"№{order_no} от {order_dt} | {obj.product.name} ({obj.quantity} шт.)"
+
+
+class SalesInvoiceItemInline(TabularInline):
+    model = SalesInvoiceItem
+    form = SalesInvoiceItemInlineForm
+    extra = 0
+    tab = True
+    fields = ("sort_order", "get_order_link", "order_item", "get_price", "get_total")
+    readonly_fields = ("get_order_link", "get_price", "get_total")
+
+    def get_formset(self, request, obj=None, **kwargs):
+        formset = super().get_formset(request, obj, **kwargs)
+        if "sort_order" in formset.form.base_fields:
+            formset.form.base_fields["sort_order"].label = "⇅"
+        return formset
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "order_item":
+            object_id = request.resolver_match.kwargs.get("object_id")
+            invoice = (
+                SalesInvoice.objects.filter(pk=object_id).first()
+                if object_id
+                else None
+            )
+            if invoice:
+                selected_order_ids = invoice.orders.values_list("id", flat=True)
+                item_filters = Q(
+                    customer_order_id__in=selected_order_ids,
+                    payment_method_customer=(
+                        OrderItem.CustomerPaymentMethod.PREPAID
+                    ),
+                )
+                if invoice.organization:
+                    item_filters &= Q(organization=invoice.organization)
+                availability_filter = Q(sales_invoice_item__isnull=True) | Q(
+                    sales_invoice_item__invoice=invoice
+                )
+                kwargs["queryset"] = OrderItem.objects.filter(
+                    item_filters, availability_filter
+                ).distinct()
+            else:
+                kwargs["queryset"] = OrderItem.objects.none()
+
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    @admin.display(description=_("Заказ"))
+    def get_order_link(self, obj):
+        if obj.order_item and obj.order_item.customer_order:
+            order = obj.order_item.customer_order
+            url = reverse("admin:documents_customerorder_change", args=[order.id])
+            return format_html(
+                '<a href="{}" target="_blank" style="font-weight: 600; '
+                'color: #3b82f6; text-decoration: underline;">{}/{}</a>',
+                url,
+                order.id,
+                order.dt_applied.strftime("%Y-%m-%d")
+                if order.dt_applied
+                else "???",
+            )
+        return "-"
+
+    @admin.display(description=_("Цена"))
+    def get_price(self, obj):
+        return obj.order_item.customer_price if obj.order_item else "-"
+
+    @admin.display(description=_("Сумма"))
+    def get_total(self, obj):
+        return obj.order_item.customer_total_price if obj.order_item else "-"
+
+
 class SupplierPriceListForm(DocumentForm):
     class Meta:
         model = SupplierPriceList
@@ -632,6 +730,118 @@ class PurchaseInvoiceAdmin(BaseDocumentAdmin):
 
         # Теперь request здесь определен и сообщение сработает
         if created_count > 0:
+            self.message_user(request, f"Добавлено позиций: {created_count}")
+        else:
+            self.message_user(
+                request, "Новых позиций для добавления не найдено", level="WARNING"
+            )
+
+
+class SalesInvoiceForm(DocumentForm):
+    fill_from_orders = forms.BooleanField(
+        label=_("Заполнить по выбранным заказам"),
+        required=False,
+        initial=False,
+        help_text=_(
+            "Автоматически добавит доступные позиции выбранных заказов "
+            "с видом оплаты «Оплата по счету»."
+        ),
+    )
+
+    class Meta:
+        model = SalesInvoice
+        fields = "__all__"
+
+
+@admin.register(SalesInvoice)
+class SalesInvoiceAdmin(BaseDocumentAdmin):
+    form = SalesInvoiceForm
+    list_filter = ("is_applied", "customer", "organization")
+    search_fields = ("id", "customer__last_name")
+    readonly_fields = BASE_READONLY
+    fields = BASE_FIELDS + (
+        "customer",
+        "bank_account",
+        "note",
+        "orders",
+        "fill_from_orders",
+    )
+    filter_horizontal = ("orders",)
+    conditional_fields = {
+        **BaseDocumentAdmin.conditional_fields,
+        "fill_from_orders": "is_applied == false",
+    }
+    inlines = [SalesInvoiceItemInline]
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == "bank_account":
+            object_id = request.resolver_match.kwargs.get("object_id")
+            invoice = self.get_object(request, object_id) if object_id else None
+            if invoice and invoice.organization_id:
+                kwargs["queryset"] = OurBankAccount.objects.filter(
+                    organization=invoice.organization
+                )
+            else:
+                kwargs["queryset"] = OurBankAccount.objects.none()
+
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        if db_field.name == "orders":
+            object_id = request.resolver_match.kwargs.get("object_id")
+            invoice = self.get_object(request, object_id) if object_id else None
+            if invoice and invoice.customer_id:
+                customer_query = Q(customer=invoice.customer)
+                if invoice.customer.parent_holding_id:
+                    customer_query |= Q(customer=invoice.customer.parent_holding)
+
+                item_filters = Q(
+                    items__payment_method_customer=(
+                        OrderItem.CustomerPaymentMethod.PREPAID
+                    )
+                )
+                if invoice.organization:
+                    item_filters &= Q(items__organization=invoice.organization)
+
+                availability_filter = Q(
+                    items__sales_invoice_item__isnull=True
+                ) | Q(items__sales_invoice_item__invoice=invoice)
+                kwargs["queryset"] = CustomerOrder.objects.filter(
+                    customer_query,
+                    item_filters,
+                    availability_filter,
+                    is_applied=True,
+                ).distinct()
+            else:
+                kwargs["queryset"] = CustomerOrder.objects.none()
+
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        if form.cleaned_data.get("fill_from_orders"):
+            self._fill_items_from_orders(request, form.instance)
+
+    def _fill_items_from_orders(self, request, obj):
+        filters = Q(
+            customer_order__in=obj.orders.all(),
+            payment_method_customer=OrderItem.CustomerPaymentMethod.PREPAID,
+            sales_invoice_item__isnull=True,
+        )
+        if obj.organization:
+            filters &= Q(organization=obj.organization)
+
+        created_count = 0
+        for order_item in OrderItem.objects.filter(filters):
+            _, created = SalesInvoiceItem.objects.get_or_create(
+                invoice=obj,
+                order_item=order_item,
+                defaults={"sort_order": order_item.sort_order_customer},
+            )
+            if created:
+                created_count += 1
+
+        if created_count:
             self.message_user(request, f"Добавлено позиций: {created_count}")
         else:
             self.message_user(
