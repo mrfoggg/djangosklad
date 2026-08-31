@@ -5,7 +5,7 @@ from django.views.decorators.http import require_GET
 
 from catalogs.models import Contractor
 
-from .models import SupplierPriceItem
+from .models import RetailPriceItem, SupplierPriceItem
 
 
 @staff_member_required
@@ -126,6 +126,68 @@ def get_latest_price_ajax(request):
                 "status": "success",
                 "title": _("Цена найдена"),
                 "message": message,
+            }
+        )
+
+    return JsonResponse(response_data)
+
+
+@staff_member_required
+@require_GET
+def get_latest_retail_price_ajax(request):
+    retail_store_id = request.GET.get("retail_store_id")
+    product_id = request.GET.get("product_id")
+
+    if not product_id:
+        return JsonResponse({"error": "Missing product_id"}, status=400)
+
+    price_items = (
+        RetailPriceItem.objects.filter(
+            document__is_applied=True,
+            document__to_remove=False,
+            product_id=product_id,
+        )
+        .select_related("document", "document__retail_store")
+        .order_by("-document__dt_applied", "-id")
+    )
+
+    # Цена конкретного магазина имеет приоритет над общей ценой для всех магазинов.
+    item = None
+    if retail_store_id:
+        item = price_items.filter(document__retail_store_id=retail_store_id).first()
+    if not item:
+        item = price_items.filter(document__retail_store__isnull=True).first()
+
+    response_data = {
+        "price": "0",
+        "currency": "UAH",
+        "status": "info",
+        "title": _("Цена не найдена"),
+        "message": _("Нет проведенных розничных прайсов. Установлено значение 0."),
+    }
+
+    if item and item.price:
+        doc_date = (item.document.dt_applied or item.document.created).strftime(
+            "%d.%m.%Y"
+        )
+        store_name = item.document.retail_store or _("Все магазины")
+        response_data.update(
+            {
+                "price": str(round(item.price.amount, 2)),
+                "currency": item.price.currency.code,
+                "status": "success",
+                "title": _("Цена найдена"),
+                "message": _(
+                    "<strong>%(price)s %(currency)s</strong><br>"
+                    "Прайс №%(num)s от %(date)s — %(store)s"
+                )
+                % {
+                    "price": round(item.price.amount, 2),
+                    "currency": item.price.currency.code,
+                    "num": item.document.id,
+                    "date": doc_date,
+                    "store": store_name,
+                },
             }
         )
 

@@ -1,7 +1,12 @@
 from django.urls import path
 
-from .views import get_latest_price_ajax
+from .views import get_latest_price_ajax, get_latest_retail_price_ajax
 
 urlpatterns = [
     path("get-price/", get_latest_price_ajax, name="get_latest_price"),
+    path(
+        "get-retail-price/",
+        get_latest_retail_price_ajax,
+        name="get_latest_retail_price",
+    ),
 ]

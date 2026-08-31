@@ -39,15 +39,32 @@ function updateCustomerOrderPriceHighlight(row) {
 	priceInput.style.backgroundColor = isBelowRrp ? "#7f1d1d" : "";
 }
 
+function getPriceSource() {
+	if (document.getElementById("id_customer")) {
+		return {
+			endpoint: "/documents/get-retail-price/",
+			id: document.getElementById("id_retail_store")?.value,
+			idParameter: "retail_store_id",
+			isRetail: true,
+		};
+	}
+
+	return {
+		endpoint: "/documents/get-price/",
+		id: document.getElementById("id_supplier")?.value,
+		idParameter: "supplier_id",
+		isRetail: false,
+	};
+}
+
 async function updateLatestPrice(productSelect, { showNotification = true } = {}) {
 	const productId = productSelect.value;
-	const partnerSelect = document.getElementById("id_supplier") || document.getElementById("id_customer");
-	const partnerId = partnerSelect?.value;
+	const priceSource = getPriceSource();
 	const row = productSelect.closest("tr, .inline-related");
 	const priceInput = row?.querySelector('input[id$="-price"]');
 	const rrpInput = row?.querySelector('input[id$="-rrp"]');
 
-	if (!partnerId || !productId || !priceInput) {
+	if ((!priceSource.isRetail && !priceSource.id) || !productId || !priceInput) {
 		return { status: "skipped" };
 	}
 
@@ -57,13 +74,15 @@ async function updateLatestPrice(productSelect, { showNotification = true } = {}
 		rowOrganizationSelect?.value || documentOrganizationSelect?.value || null;
 	const priceType = document.getElementById("id_price_type")?.value;
 
-	const url = new URL("/documents/get-price/", window.location.origin);
-	url.searchParams.append("supplier_id", partnerId);
+	const url = new URL(priceSource.endpoint, window.location.origin);
+	if (priceSource.id) {
+		url.searchParams.append(priceSource.idParameter, priceSource.id);
+	}
 	url.searchParams.append("product_id", productId);
-	if (organizationId) {
+	if (!priceSource.isRetail && organizationId) {
 		url.searchParams.append("organization_id", organizationId);
 	}
-	if (priceType) {
+	if (!priceSource.isRetail && priceType) {
 		url.searchParams.append("price_type", priceType);
 	}
 
@@ -72,7 +91,7 @@ async function updateLatestPrice(productSelect, { showNotification = true } = {}
 		const data = await response.json();
 
 		priceInput.value = data.price;
-		if (rrpInput) {
+		if (rrpInput && data.rrp !== undefined) {
 			rrpInput.value = data.rrp;
 			rrpInput.dispatchEvent(new Event("change", { bubbles: true }));
 		}
@@ -105,15 +124,20 @@ async function updateLatestPrice(productSelect, { showNotification = true } = {}
 }
 
 document.addEventListener("change", async (event) => {
+	const priceSource = getPriceSource();
 	const isSupplierChanged = event.target?.id === "id_supplier";
+	const isRetailStoreChanged = event.target?.id === "id_retail_store";
 	const isDocumentOrganizationChanged = event.target?.id === "id_organization";
 	const isPriceTypeChanged = event.target?.id === "id_price_type";
 	const isRowOrganizationChanged =
 		event.target?.id.endsWith("-organization") && !isDocumentOrganizationChanged;
+	const shouldBatchUpdate =
+		(!priceSource.isRetail &&
+			(isSupplierChanged || isDocumentOrganizationChanged || isPriceTypeChanged)) ||
+		(priceSource.isRetail && isRetailStoreChanged);
 
-	if (isSupplierChanged || isDocumentOrganizationChanged || isPriceTypeChanged) {
-		const supplierId = document.getElementById("id_supplier")?.value;
-		if (!supplierId || (isSupplierChanged && !event.target.value)) {
+	if (shouldBatchUpdate) {
+		if (!priceSource.id || (isSupplierChanged && !event.target.value)) {
 			return;
 		}
 
@@ -123,7 +147,7 @@ document.addEventListener("change", async (event) => {
 					return false;
 				}
 
-				if (!isDocumentOrganizationChanged) {
+				if (!isDocumentOrganizationChanged || priceSource.isRetail) {
 					return true;
 				}
 
