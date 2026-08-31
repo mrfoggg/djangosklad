@@ -361,5 +361,6 @@ class WarehouseAdmin(BaseCatalogAdmin):
 
 @admin.register(RetailStore)
 class RetailStoreAdmin(BaseCatalogAdmin):
-    list_display = ("name", "url", "description")
+    list_display = ("name", "url", "description", "is_default")
+    list_editable = ("is_default",)
     search_fields = ("name", "description")

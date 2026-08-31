@@ -8,7 +8,7 @@ from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
 from unfold.views import BaseAutocompleteView
 
-from catalogs.models import Contractor, Organization
+from catalogs.models import Contractor, Organization, RetailStore
 
 
 def get_default_organization_id():
@@ -19,6 +19,14 @@ def get_default_organization_id():
         .first()
     )
     return org_id
+
+
+def get_default_retail_store_id():
+    return (
+        RetailStore.objects.filter(is_default=True)
+        .values_list("id", flat=True)
+        .first()
+    )
 
 
 class BaseDocumentModel(models.Model):
@@ -170,6 +178,7 @@ class RetailPriceList(BaseDocumentModel):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
+        default=get_default_retail_store_id,
         related_name="price_lists",
         verbose_name=_("Розничный магазин"),
         help_text=_("Оставьте пустым, если прайс действует для всех магазинов"),
@@ -274,6 +283,13 @@ class CustomerOrder(BaseDocumentModel):
         related_name="customer_orders",
         limit_choices_to={"is_customer": True},
         verbose_name=_("Покупатель"),
+    )
+    retail_store = models.ForeignKey(
+        RetailStore,
+        default=get_default_retail_store_id,
+        on_delete=models.PROTECT,
+        related_name="customer_orders",
+        verbose_name=_("Розничный магазин"),
     )
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default="new", verbose_name=_("Статус")

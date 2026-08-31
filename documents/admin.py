@@ -448,10 +448,10 @@ class CustomerOrderForm(DocumentForm):
 class CustomerOrderAdmin(BaseDocumentAdmin):
     form = CustomerOrderForm
 
-    list_filter = ["status", "is_applied"]
+    list_filter = ["status", "is_applied", "retail_store"]
     search_fields = ["customer", "id"]
     readonly_fields = BASE_READONLY
-    fields = BASE_FIELDS + ("customer", "status")
+    fields = BASE_FIELDS + ("customer", "retail_store", "status")
     inlines = [CustomeOrderItemInline]
 
     class Media:

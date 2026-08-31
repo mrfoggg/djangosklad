@@ -585,6 +585,11 @@ class RetailStore(BaseModel):
         blank=True,
         verbose_name=_("Описание"),
     )
+    is_default = models.BooleanField(
+        default=False,
+        verbose_name=_("Использовать по умолчанию"),
+        help_text=_("Этот магазин будет автоматически выбираться в новых установках розничных цен"),
+    )
 
     class Meta:
         verbose_name = _("Розничный магазин")
@@ -593,3 +598,10 @@ class RetailStore(BaseModel):
 
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        if self.is_default:
+            RetailStore.objects.filter(is_default=True).exclude(pk=self.pk).update(
+                is_default=False
+            )
+        super().save(*args, **kwargs)
