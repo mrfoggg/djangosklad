@@ -150,7 +150,12 @@ class OrderItemInlineForm(forms.ModelForm):
                     "style": "width: 250px;",  # Жесткая фиксация
                 }
             ),
-            "price": UnfoldAdminDecimalFieldWidget(
+            "purchase_price": UnfoldAdminDecimalFieldWidget(
+                attrs={
+                    "style": "width: 120px;",
+                }
+            ),
+            "customer_price": UnfoldAdminDecimalFieldWidget(
                 attrs={
                     "style": "width: 120px;",  # Жесткая фиксация
                 }
@@ -212,10 +217,10 @@ class PurchaseOrderItemInline(TabularInline):
     fields = (
         "sort_order_purchase",
         "product",
-        "price",
+        "purchase_price",
         "rrp",
         "quantity",
-        "total_price",
+        "purchase_total_price",
         "organization",
         "customer_order",
         "warehouse",
@@ -223,7 +228,7 @@ class PurchaseOrderItemInline(TabularInline):
         "get_invoice_link",
     )
     ordering = ("sort_order_purchase",)
-    readonly_fields = ("total_price", "get_invoice_link")
+    readonly_fields = ("purchase_total_price", "get_invoice_link")
 
     @admin.display(description=_("Счет"))
     def get_invoice_link(self, obj):
@@ -250,16 +255,17 @@ class CustomeOrderItemInline(TabularInline):
     fields = (
         "sort_order_customer",
         "product",
-        "price",
+        "customer_price",
+        "purchase_price",
         "rrp",
         "quantity",
-        "total_price",
+        "customer_total_price",
         "purchase_order",
         "warehouse",
         "payment_method_customer",
     )
     ordering = ("sort_order_customer",)
-    readonly_fields = ("total_price",)
+    readonly_fields = ("customer_total_price",)
 
 
 class PurchaseInvoiceItemInlineForm(forms.ModelForm):
@@ -346,13 +352,11 @@ class InvoiceItemInline(TabularInline):
 
     @admin.display(description=_("Цена"))
     def get_price(self, obj):
-        # Используем твой DecimalField из OrderItem
-        return obj.order_item.price if obj.order_item else "-"
+        return obj.order_item.purchase_price if obj.order_item else "-"
 
     @admin.display(description=_("Сумма"))
     def get_total(self, obj):
-        # Используем твой GeneratedField из OrderItem
-        return obj.order_item.total_price if obj.order_item else "-"
+        return obj.order_item.purchase_total_price if obj.order_item else "-"
 
 
 class SupplierPriceListForm(DocumentForm):

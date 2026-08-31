@@ -5,7 +5,7 @@ from django.views.decorators.http import require_GET
 
 from catalogs.models import Contractor
 
-from .models import RetailPriceItem, SupplierPriceItem
+from .models import PurchaseOrder, RetailPriceItem, SupplierPriceItem
 
 
 @staff_member_required
@@ -15,6 +15,16 @@ def get_latest_price_ajax(request):
     product_id = request.GET.get("product_id")
     organization_id = request.GET.get("organization_id")
     requested_price_type = request.GET.get("price_type")
+    purchase_order_id = request.GET.get("purchase_order_id")
+
+    if purchase_order_id:
+        purchase_order = PurchaseOrder.objects.filter(pk=purchase_order_id).first()
+        if not purchase_order:
+            return JsonResponse({"error": "Purchase order not found"}, status=404)
+
+        supplier_id = purchase_order.supplier_id
+        organization_id = purchase_order.organization_id
+        requested_price_type = purchase_order.price_type
 
     if not supplier_id or not product_id:
         return JsonResponse({"error": "Missing parameters"}, status=400)
