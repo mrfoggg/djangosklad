@@ -115,10 +115,43 @@ class RetailPriceItemInline(TabularInline):
         )
 
 
+class ProductUnitSelectWidget(UnfoldAdminSelectWidget):
+    def create_option(
+        self, name, value, label, selected, index, subindex=None, attrs=None
+    ):
+        option = super().create_option(
+            name, value, label, selected, index, subindex=subindex, attrs=attrs
+        )
+        product = getattr(value, "instance", None)
+        if product is not None and product.unit_id:
+            option["attrs"]["data-quantity-decimal-places"] = (
+                product.unit.decimal_places
+            )
+            option["attrs"]["data-unit-symbol"] = product.unit.symbol
+        return option
+
+
 class OrderItemInlineForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if "product" in self.fields:
+            self.fields["product"].queryset = self.fields[
+                "product"
+            ].queryset.select_related("unit")
+
         instance = getattr(self, "instance", None)
+        quantity_field = self.fields.get("quantity")
+        if quantity_field:
+            decimal_places = 0
+            if instance and instance.product_id:
+                decimal_places = instance.product.unit.decimal_places
+
+            quantity_field.widget.attrs["step"] = (
+                "1" if decimal_places == 0 else f"{Decimal(1).scaleb(-decimal_places):f}"
+            )
+            if not self.is_bound and instance and instance.pk:
+                self.initial["quantity"] = f"{instance.quantity:.{decimal_places}f}"
+
         if not instance or not instance.pk:
             return
 
@@ -148,9 +181,31 @@ class OrderItemInlineForm(forms.ModelForm):
             if name in self.fields:
                 self.fields[name].disabled = True
 
+    def clean_quantity(self):
+        quantity = self.cleaned_data.get("quantity")
+        product = self.cleaned_data.get("product")
+        if quantity is None or product is None:
+            return quantity
+
+        decimal_places = product.unit.decimal_places
+        normalized_quantity = quantity.normalize()
+        actual_decimal_places = max(0, -normalized_quantity.as_tuple().exponent)
+        if actual_decimal_places > decimal_places:
+            raise forms.ValidationError(
+                _(
+                    "Для единицы измерения '%(unit)s' разрешено знаков после "
+                    "запятой: %(decimal_places)s."
+                ),
+                params={
+                    "unit": product.unit.symbol,
+                    "decimal_places": decimal_places,
+                },
+            )
+        return quantity
+
     class Meta:
         widgets = {
-            "product": UnfoldAdminSelectWidget(
+            "product": ProductUnitSelectWidget(
                 attrs={
                     "style": "width: 250px;",  # Жесткая фиксация
                 }
@@ -298,7 +353,10 @@ class PurchaseInvoiceItemInlineForm(forms.ModelForm):
         # Формируем строку: Заказ №X | Товар | Кол-во
         order_no = obj.purchase_order.id if obj.purchase_order else "???"
         order_dt = obj.purchase_order.dt_applied if obj.purchase_order else "???"
-        return f"№{order_no} от {order_dt} | {obj.product.name} ({obj.quantity} шт.)"
+        return (
+            f"№{order_no} от {order_dt} | {obj.product.name} "
+            f"({obj.quantity} {obj.product.unit.symbol})"
+        )
 
 
 class InvoiceItemInline(TabularInline):
@@ -401,7 +459,10 @@ class SalesInvoiceItemInlineForm(forms.ModelForm):
     def label_for_customer(self, obj):
         order_no = obj.customer_order.id if obj.customer_order else "???"
         order_dt = obj.customer_order.dt_applied if obj.customer_order else "???"
-        return f"№{order_no} от {order_dt} | {obj.product.name} ({obj.quantity} шт.)"
+        return (
+            f"№{order_no} от {order_dt} | {obj.product.name} "
+            f"({obj.quantity} {obj.product.unit.symbol})"
+        )
 
 
 class SalesInvoiceItemInline(TabularInline):
@@ -606,6 +667,7 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
             "https://cdn.jsdelivr.net/npm/sweetalert2@11",
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_price_fetch.js",
+            "documents/js/admin_quantity_step.js",
             "documents/js/admin_sortable_init.js",
         ]
 
@@ -655,6 +717,7 @@ class CustomerOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
             "https://cdn.jsdelivr.net/npm/sweetalert2@11",
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_price_fetch.js",
+            "documents/js/admin_quantity_step.js",
             "documents/js/admin_sortable_init.js",
         ]
 

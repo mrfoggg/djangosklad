@@ -39,6 +39,36 @@ function updateCustomerOrderPriceHighlight(row) {
 	priceInput.style.backgroundColor = isBelowRrp ? "#7f1d1d" : "";
 }
 
+function updateQuantityStep(productSelect) {
+	const row = productSelect?.closest("tr, .inline-related");
+	const quantityInput = row?.querySelector('input[id$="-quantity"]');
+	const selectedOption = productSelect?.selectedOptions?.[0];
+	if (!quantityInput) {
+		return;
+	}
+
+	const decimalPlaces = Number.parseInt(
+		selectedOption?.dataset.quantityDecimalPlaces ?? "0",
+		10,
+	);
+	const safeDecimalPlaces = Number.isInteger(decimalPlaces) ? decimalPlaces : 0;
+	quantityInput.step =
+		safeDecimalPlaces === 0 ? "1" : `0.${"0".repeat(safeDecimalPlaces - 1)}1`;
+	quantityInput.dataset.unitSymbol = selectedOption?.dataset.unitSymbol ?? "";
+
+	const match = quantityInput.value.replace(",", ".").match(/^(-?\d+)(?:\.(\d+))?$/);
+	if (match) {
+		const [, integerPart, fraction = ""] = match;
+		const discardedPart = fraction.slice(safeDecimalPlaces);
+		if (!discardedPart || /^0+$/.test(discardedPart)) {
+			quantityInput.value =
+				safeDecimalPlaces === 0
+					? integerPart
+					: `${integerPart}.${fraction.padEnd(safeDecimalPlaces, "0").slice(0, safeDecimalPlaces)}`;
+		}
+	}
+}
+
 function getPriceSource() {
 	if (document.getElementById("id_customer")) {
 		return {
@@ -218,6 +248,7 @@ document.addEventListener("change", async (event) => {
 	}
 
 	if (event.target?.id.endsWith("-product")) {
+		updateQuantityStep(event.target);
 		await updateLatestPrice(event.target);
 		const row = event.target.closest("tr, .inline-related");
 		if (getPriceSource().isRetail && row?.querySelector('select[id$="-purchase_order"]')?.value) {
@@ -256,8 +287,20 @@ function initializeCustomerOrderPriceHighlights() {
 	});
 }
 
+function initializeQuantitySteps(root = document) {
+	root.querySelectorAll('select[id$="-product"]').forEach(updateQuantityStep);
+}
+
+document.addEventListener("formset:added", (event) => {
+	initializeQuantitySteps(event.target);
+});
+
 if (document.readyState === "loading") {
-	document.addEventListener("DOMContentLoaded", initializeCustomerOrderPriceHighlights);
+	document.addEventListener("DOMContentLoaded", () => {
+		initializeCustomerOrderPriceHighlights();
+		initializeQuantitySteps();
+	});
 } else {
 	initializeCustomerOrderPriceHighlights();
+	initializeQuantitySteps();
 }

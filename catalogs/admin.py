@@ -15,6 +15,7 @@ from .models import (
     ContractorBankAccount,
     ContractorLegalDetails,
     ContractorLink,
+    MeasurementUnit,
     Organization,
     Product,
     ProductSupplier,
@@ -222,6 +223,13 @@ class OrganizationAdmin(BaseCatalogAdmin):
     list_editable = ("is_default",)
 
 
+@admin.register(MeasurementUnit)
+class MeasurementUnitAdmin(BaseCatalogAdmin):
+    readonly_fields = ()
+    list_display = ("name", "symbol", "code", "decimal_places")
+    search_fields = ("name", "symbol", "code")
+
+
 @admin.register(Product)
 class ProductAdmin(BaseCatalogAdmin):
     search_fields = ("name", "site_name", "sku", "external_id")
@@ -242,6 +250,7 @@ class ProductAdmin(BaseCatalogAdmin):
                 "fields": (
                     ("sku", "external_id"),
                     ("brand", "main_supplier"),
+                    "unit",
                     ("category", "subcategories"),
                 ),
             },

@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django_countries.fields import CountryField
@@ -301,6 +301,38 @@ class Organization(BaseModel):  # Наследуемся от вашей BaseMod
         super().save(*args, **kwargs)
 
 
+class MeasurementUnit(models.Model):
+    code = models.CharField(max_length=20, unique=True, verbose_name=_("Код"))
+    name = models.CharField(max_length=100, verbose_name=_("Название"))
+    symbol = models.CharField(max_length=20, verbose_name=_("Обозначение"))
+    decimal_places = models.PositiveSmallIntegerField(
+        default=0,
+        validators=[MaxValueValidator(6)],
+        verbose_name=_("Знаков после запятой"),
+        help_text=_("Определяет точность количества и шаг стрелок в форме заказа"),
+    )
+
+    class Meta:
+        ordering = ("name",)
+        verbose_name = _("Единица измерения")
+        verbose_name_plural = _("Единицы измерения")
+
+    def __str__(self):
+        return self.symbol
+
+
+def get_default_measurement_unit_id():
+    unit, _was_created = MeasurementUnit.objects.get_or_create(
+        code="pcs",
+        defaults={
+            "name": _("Штука"),
+            "symbol": _("шт."),
+            "decimal_places": 0,
+        },
+    )
+    return unit.pk
+
+
 class Product(BaseModel):
     name = models.CharField(max_length=255, blank=True, verbose_name=_("Название"))
 
@@ -364,12 +396,23 @@ class Product(BaseModel):
         help_text=_("Выберите из списка уже добавленных поставщиков"),
     )
 
+    unit = models.ForeignKey(
+        MeasurementUnit,
+        on_delete=models.PROTECT,
+        default=get_default_measurement_unit_id,
+        related_name="products",
+        verbose_name=_("Единица измерения"),
+    )
+
     def __str__(self):
         if self.name:
-            return self.name
+            product_name = self.name
         elif self.site_name:
-            return f"site_name: {self.site_name}"
-        return f"Product object ({self.id})"  # Фолбэк, если оба поля пустые
+            product_name = f"site_name: {self.site_name}"
+        else:
+            product_name = f"Product object ({self.id})"
+
+        return f"{product_name}, {self.unit.symbol}" if self.unit_id else product_name
 
     class Meta:
         verbose_name = _("Товар")

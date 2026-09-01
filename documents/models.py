@@ -342,7 +342,10 @@ class OrderItem(models.Model):
         verbose_name=_("РРЦ"),
     )
     quantity = models.DecimalField(
-        max_digits=10, decimal_places=2, default=1.00, verbose_name=_("Количество")
+        max_digits=14,
+        decimal_places=6,
+        default=1,
+        verbose_name=_("Количество"),
     )
     # ВЫЧИСЛЯЕМЫЕ СУММЫ
     purchase_total_price = models.GeneratedField(

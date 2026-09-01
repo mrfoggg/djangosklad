@@ -6,10 +6,12 @@ from djmoney.money import Money
 
 from catalogs.models import (
     Contractor,
+    MeasurementUnit,
     Organization,
     OurBankAccount,
     Product,
     ProductSupplier,
+    Warehouse,
 )
 
 from .admin import (
@@ -97,6 +99,55 @@ class OrderItemInlineFormTests(TestCase):
             "customer_order",
         ):
             self.assertTrue(form.fields[name].disabled, name)
+
+    def test_quantity_precision_comes_from_products_unit(self):
+        unit = MeasurementUnit.objects.create(
+            code="kg", name="Килограмм", symbol="кг", decimal_places=3
+        )
+        product = Product.objects.create(name="Весовой товар", sku="weighted", unit=unit)
+        warehouse = Warehouse.objects.create(name="Виртуальный", is_virtual=True)
+        form_class = modelform_factory(
+            OrderItem,
+            form=OrderItemInlineForm,
+            fields="__all__",
+        )
+
+        valid_form = form_class(
+            data={
+                "product": product.pk,
+                "quantity": "1.234",
+                "warehouse": warehouse.pk,
+                "payment_method_customer": OrderItem.CustomerPaymentMethod.PREPAID,
+            }
+        )
+        invalid_form = form_class(
+            data={
+                "product": product.pk,
+                "quantity": "1.2345",
+                "warehouse": warehouse.pk,
+                "payment_method_customer": OrderItem.CustomerPaymentMethod.PREPAID,
+            }
+        )
+
+        self.assertTrue(valid_form.is_valid(), valid_form.errors)
+        self.assertFalse(invalid_form.is_valid())
+        self.assertIn("quantity", invalid_form.errors)
+
+    def test_product_option_contains_quantity_step_metadata(self):
+        unit = MeasurementUnit.objects.create(
+            code="m", name="Метр", symbol="м", decimal_places=2
+        )
+        Product.objects.create(name="Кабель", sku="cable", unit=unit)
+        form_class = modelform_factory(
+            OrderItem,
+            form=OrderItemInlineForm,
+            fields="__all__",
+        )
+
+        product_html = str(form_class()["product"])
+
+        self.assertIn('data-quantity-decimal-places="2"', product_html)
+        self.assertIn('data-unit-symbol="м"', product_html)
 
 
 class OrderItemPaymentMethodTests(TestCase):
