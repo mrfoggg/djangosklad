@@ -118,33 +118,31 @@ class OrderItemInlineForm(forms.ModelForm):
         if not instance or not instance.pk:
             return
 
-        # Проверяем проведение заказов
-        is_locked = (
+        purchase_order_applied = bool(
             instance.purchase_order and instance.purchase_order.is_applied
-        ) or (instance.customer_order and instance.customer_order.is_applied)
+        )
+        customer_order_applied = bool(
+            instance.customer_order and instance.customer_order.is_applied
+        )
 
-        if is_locked:
-            allowed_fields = [
-                "sort_order_purchase",
-                "sort_order_customer",
-                "payment_method_customer",
-            ]
+        locked_fields = set()
 
-            # Проверяем, существует ли уже связанный счет
-            has_invoice = (
-                hasattr(instance, "invoice_item") and instance.invoice_item
-            ) or (
-                hasattr(instance, "sales_invoice_item")
-                and instance.sales_invoice_item
+        if purchase_order_applied or customer_order_applied:
+            locked_fields.update(
+                {"product", "rrp", "quantity", "warehouse", "organization"}
             )
 
-            for name, field in self.fields.items():
-                # Блокируем поле, если его нет в разрешенных
-                # ИЛИ если это метод оплаты при уже выставленном счете
-                is_payment_method = name == "payment_method_customer"
+        if purchase_order_applied:
+            locked_fields.update({"purchase_price", "customer_order"})
 
-                if (name not in allowed_fields) or (is_payment_method and has_invoice):
-                    field.disabled = True
+        if customer_order_applied:
+            locked_fields.update(
+                {"customer_price", "payment_method_customer", "purchase_order"}
+            )
+
+        for name in locked_fields:
+            if name in self.fields:
+                self.fields[name].disabled = True
 
     class Meta:
         widgets = {

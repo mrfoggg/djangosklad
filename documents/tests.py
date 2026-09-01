@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.forms import modelform_factory
 from django.test import TestCase
 from django.urls import reverse
 from djmoney.money import Money
@@ -11,15 +12,91 @@ from catalogs.models import (
     ProductSupplier,
 )
 
-from .admin import PurchaseInvoiceItemInlineForm, SalesInvoiceItemInlineForm
+from .admin import (
+    OrderItemInlineForm,
+    PurchaseInvoiceItemInlineForm,
+    SalesInvoiceItemInlineForm,
+)
 from .models import (
+    CustomerOrder,
     InvoiceItem,
     OrderItem,
+    PurchaseOrder,
     SalesInvoice,
     SalesInvoiceItem,
     SupplierPriceItem,
     SupplierPriceList,
 )
+
+
+class OrderItemInlineFormTests(TestCase):
+    @staticmethod
+    def make_form(*, purchase_applied=False, customer_applied=False):
+        purchase_order = PurchaseOrder(pk=1, is_applied=purchase_applied)
+        customer_order = CustomerOrder(pk=1, is_applied=customer_applied)
+        instance = OrderItem(
+            pk=1,
+            purchase_order=purchase_order,
+            customer_order=customer_order,
+        )
+        form_class = modelform_factory(
+            OrderItem,
+            form=OrderItemInlineForm,
+            fields="__all__",
+        )
+        return form_class(instance=instance)
+
+    def test_fields_locked_by_applied_purchase_order(self):
+        form = self.make_form(purchase_applied=True)
+
+        for name in (
+            "product",
+            "rrp",
+            "quantity",
+            "warehouse",
+            "organization",
+            "purchase_price",
+            "customer_order",
+        ):
+            self.assertTrue(form.fields[name].disabled, name)
+
+        for name in ("customer_price", "payment_method_customer", "purchase_order"):
+            self.assertFalse(form.fields[name].disabled, name)
+
+    def test_fields_locked_by_applied_customer_order(self):
+        form = self.make_form(customer_applied=True)
+
+        for name in (
+            "product",
+            "rrp",
+            "quantity",
+            "warehouse",
+            "organization",
+            "customer_price",
+            "payment_method_customer",
+            "purchase_order",
+        ):
+            self.assertTrue(form.fields[name].disabled, name)
+
+        for name in ("purchase_price", "customer_order"):
+            self.assertFalse(form.fields[name].disabled, name)
+
+    def test_all_restricted_fields_locked_when_both_orders_are_applied(self):
+        form = self.make_form(purchase_applied=True, customer_applied=True)
+
+        for name in (
+            "product",
+            "rrp",
+            "quantity",
+            "warehouse",
+            "organization",
+            "purchase_price",
+            "customer_price",
+            "payment_method_customer",
+            "purchase_order",
+            "customer_order",
+        ):
+            self.assertTrue(form.fields[name].disabled, name)
 
 
 class OrderItemPaymentMethodTests(TestCase):
