@@ -1,8 +1,12 @@
+from decimal import Decimal
+
 from django import forms
 from django.contrib import admin
-from django.db.models import Q
+from django.db.models import Count, DecimalField, Q, Sum, Value
+from django.db.models.functions import Coalesce
 from django.forms.models import BaseInlineFormSet
 from django.urls import reverse
+from django.utils.formats import number_format
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
@@ -537,10 +541,63 @@ class PurchaseOrderForm(DocumentForm):
         fields = "__all__"
 
 
+class OrderTotalsAdminMixin:
+    total_field = None
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        decimal_output = DecimalField(max_digits=20, decimal_places=2)
+        return queryset.annotate(
+            calculated_total=Coalesce(
+                Sum(self.total_field),
+                Value(Decimal("0.00")),
+                output_field=decimal_output,
+            ),
+            calculated_quantity=Coalesce(
+                Sum("items__quantity"),
+                Value(Decimal("0.00")),
+                output_field=decimal_output,
+            ),
+            calculated_product_count=Count("items__product", distinct=True),
+        )
+
+    @admin.display(description=_("Итого, грн"), ordering="calculated_total")
+    def order_total(self, obj):
+        total = getattr(obj, "calculated_total", Decimal("0.00"))
+        return number_format(total, decimal_pos=2, use_l10n=True)
+
+    @admin.display(description=_("Количество"), ordering="calculated_quantity")
+    def order_quantity(self, obj):
+        return getattr(obj, "calculated_quantity", Decimal("0.00"))
+
+    @admin.display(
+        description=_("Наименований"), ordering="calculated_product_count"
+    )
+    def product_count(self, obj):
+        return getattr(obj, "calculated_product_count", 0)
+
+
 # Заказ поставщику
 @admin.register(PurchaseOrder)
-class PurchaseOrderAdmin(BaseDocumentAdmin):
+class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     form = PurchaseOrderForm
+    total_field = "items__purchase_total_price"
+    readonly_fields = BASE_READONLY + (
+        "order_total",
+        "order_quantity",
+        "product_count",
+    )
+    list_display = (
+        "id",
+        "supplier",
+        "organization",
+        "order_total",
+        "order_quantity",
+        "product_count",
+        "is_applied",
+        "created",
+    )
+    list_display_links = ("id", "supplier")
     list_filter = ("is_applied", "supplier")
     inlines = [PurchaseOrderItemInline]
 
@@ -561,13 +618,36 @@ class CustomerOrderForm(DocumentForm):
 
 # Заказ покупателя
 @admin.register(CustomerOrder)
-class CustomerOrderAdmin(BaseDocumentAdmin):
+class CustomerOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     form = CustomerOrderForm
+    total_field = "items__customer_total_price"
+    list_display = (
+        "id",
+        "customer",
+        "retail_store",
+        "organization",
+        "order_total",
+        "order_quantity",
+        "product_count",
+        "status",
+        "is_applied",
+        "created",
+    )
+    list_display_links = ("id", "customer")
 
     list_filter = ["status", "is_applied", "retail_store"]
     search_fields = ["customer", "id"]
-    readonly_fields = BASE_READONLY
-    fields = BASE_FIELDS + ("customer", "retail_store", "status")
+    readonly_fields = BASE_READONLY + (
+        "order_total",
+        "order_quantity",
+        "product_count",
+    )
+    fields = BASE_FIELDS + (
+        "customer",
+        "retail_store",
+        "status",
+        ("order_total", "order_quantity", "product_count"),
+    )
     inlines = [CustomeOrderItemInline]
 
     class Media:
