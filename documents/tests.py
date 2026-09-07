@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.forms import modelform_factory
@@ -26,6 +27,9 @@ from .models import (
     CustomerOrder,
     InvoiceItem,
     OrderItem,
+    PaymentOrderOut,
+    PaymentOutItem,
+    PurchaseInvoice,
     PurchaseOrder,
     RetailPriceItem,
     RetailPriceList,
@@ -34,6 +38,65 @@ from .models import (
     SupplierPriceItem,
     SupplierPriceList,
 )
+
+
+class PaymentOutItemTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.organization = Organization.objects.create(name="Организация платежа")
+        cls.supplier = Contractor.objects.create(
+            last_name="Поставщик для оплаты", is_supplier=True
+        )
+        cls.product = Product.objects.create(name="Оплачиваемый товар", sku="payable")
+        cls.warehouse = Warehouse.objects.create(name="Склад оплаты", is_virtual=True)
+        cls.order_item = OrderItem.objects.create(
+            product=cls.product,
+            warehouse=cls.warehouse,
+            quantity=1,
+            purchase_price="100.00",
+        )
+        cls.invoice = PurchaseInvoice.objects.create(
+            supplier=cls.supplier,
+            organization=cls.organization,
+        )
+        InvoiceItem.objects.create(invoice=cls.invoice, order_item=cls.order_item)
+
+    def create_payment(self, amount, *, is_applied=False):
+        return PaymentOrderOut.objects.create(
+            organization=self.organization,
+            contractor=self.supplier,
+            amount=amount,
+            is_applied=is_applied,
+        )
+
+    def test_blank_amount_is_filled_with_unpaid_invoice_balance(self):
+        paid = self.create_payment("40.00", is_applied=True)
+        PaymentOutItem.objects.create(
+            payment=paid,
+            invoice=self.invoice,
+            amount="40.00",
+        )
+        current_payment = self.create_payment("60.00")
+
+        item = PaymentOutItem.objects.create(
+            payment=current_payment,
+            invoice=self.invoice,
+            amount=None,
+        )
+
+        self.assertEqual(item.amount, Decimal("60.00"))
+
+    def test_explicit_amount_is_not_replaced(self):
+        payment = self.create_payment("25.00")
+
+        item = PaymentOutItem.objects.create(
+            payment=payment,
+            invoice=self.invoice,
+            amount="25.00",
+        )
+        item.refresh_from_db()
+
+        self.assertEqual(item.amount, Decimal("25.00"))
 
 
 class OrderItemInlineFormTests(TestCase):

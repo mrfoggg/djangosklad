@@ -720,8 +720,30 @@ class PaymentOutItem(models.Model):
 
     # Сумма, которую мы относим на этот конкретный счет
     amount = models.DecimalField(
-        max_digits=12, decimal_places=2, verbose_name=_("Сумма оплаты")
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_("Сумма оплаты"),
     )
+
+    def save(self, *args, **kwargs):
+        if self.amount is None and self.invoice_id:
+            invoice_total = self.invoice.items.aggregate(
+                total=models.Sum("order_item__purchase_total_price")
+            )["total"] or Decimal("0.00")
+            paid_total = (
+                PaymentOutItem.objects.filter(
+                    invoice_id=self.invoice_id,
+                    payment__is_applied=True,
+                )
+                .exclude(pk=self.pk)
+                .aggregate(total=models.Sum("amount"))["total"]
+                or Decimal("0.00")
+            )
+            self.amount = max(invoice_total - paid_total, Decimal("0.00"))
+
+        super().save(*args, **kwargs)
 
     class Meta:
         verbose_name = _("Оплата счета")
