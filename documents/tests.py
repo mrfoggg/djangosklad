@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from django.contrib.auth import get_user_model
 from django.forms import modelform_factory
 from django.test import TestCase
@@ -11,6 +13,7 @@ from catalogs.models import (
     OurBankAccount,
     Product,
     ProductSupplier,
+    RetailStore,
     Warehouse,
 )
 
@@ -24,6 +27,8 @@ from .models import (
     InvoiceItem,
     OrderItem,
     PurchaseOrder,
+    RetailPriceItem,
+    RetailPriceList,
     SalesInvoice,
     SalesInvoiceItem,
     SupplierPriceItem,
@@ -219,6 +224,7 @@ class MainSupplierPriceAjaxTests(TestCase):
             last_name="Тестовый поставщик",
             default_price_type=Contractor.PriceType.WHOLESALE,
         )
+        cls.organization = Organization.objects.create(name="Тестовая организация")
         cls.product = Product.objects.create(name="Тестовый товар", sku="test-product")
         product_supplier = ProductSupplier.objects.create(
             product=cls.product,
@@ -265,3 +271,118 @@ class MainSupplierPriceAjaxTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "info")
         self.assertEqual(response.json()["price"], "0")
+
+    def create_supplier_price(self, price, applied_at):
+        price_list = SupplierPriceList.objects.create(
+            supplier=self.supplier,
+            is_applied=True,
+            dt_applied=applied_at,
+        )
+        SupplierPriceItem.objects.create(
+            document=price_list,
+            product=self.product,
+            price=Money(price, "UAH"),
+            wholesale_price=Money(price, "UAH"),
+        )
+
+    def test_uses_latest_supplier_price_before_order_application_date(self):
+        self.create_supplier_price("80.00", datetime(2025, 1, 1, tzinfo=UTC))
+        self.create_supplier_price("120.00", datetime(2025, 1, 3, tzinfo=UTC))
+        order = PurchaseOrder.objects.create(
+            supplier=self.supplier,
+            organization=self.organization,
+            is_applied=True,
+            dt_applied=datetime(2025, 1, 2, tzinfo=UTC),
+        )
+
+        response = self.client.get(
+            reverse("get_latest_price"),
+            {"product_id": self.product.pk, "purchase_order_id": order.pk},
+        )
+
+        self.assertEqual(response.json()["price"], "80.00")
+
+    def test_uses_latest_supplier_price_when_order_has_no_application_date(self):
+        self.create_supplier_price("120.00", datetime(2025, 1, 3, tzinfo=UTC))
+        order = PurchaseOrder.objects.create(
+            supplier=self.supplier,
+            organization=self.organization,
+        )
+
+        response = self.client.get(
+            reverse("get_latest_price"),
+            {"product_id": self.product.pk, "purchase_order_id": order.pk},
+        )
+
+        self.assertEqual(response.json()["price"], "100.00")
+
+
+class RetailPriceAjaxDateTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_superuser(
+            username="retail-admin", password="test-password"
+        )
+        cls.organization = Organization.objects.create(name="Розничная организация")
+        cls.customer = Contractor.objects.create(
+            last_name="Розничный покупатель", is_customer=True
+        )
+        cls.store = RetailStore.objects.create(name="Тестовый магазин")
+        cls.product = Product.objects.create(name="Розничный товар", sku="retail-product")
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def create_retail_price(self, price, applied_at):
+        price_list = RetailPriceList.objects.create(
+            retail_store=self.store,
+            organization=self.organization,
+            is_applied=True,
+            dt_applied=applied_at,
+        )
+        RetailPriceItem.objects.create(
+            document=price_list,
+            product=self.product,
+            price=Money(price, "UAH"),
+        )
+
+    def test_uses_latest_retail_price_before_order_application_date(self):
+        self.create_retail_price("150.00", datetime(2025, 1, 1, tzinfo=UTC))
+        self.create_retail_price("250.00", datetime(2025, 1, 3, tzinfo=UTC))
+        order = CustomerOrder.objects.create(
+            customer=self.customer,
+            retail_store=self.store,
+            organization=self.organization,
+            is_applied=True,
+            dt_applied=datetime(2025, 1, 2, tzinfo=UTC),
+        )
+
+        response = self.client.get(
+            reverse("get_latest_retail_price"),
+            {
+                "product_id": self.product.pk,
+                "retail_store_id": self.store.pk,
+                "customer_order_id": order.pk,
+            },
+        )
+
+        self.assertEqual(response.json()["price"], "150.00")
+
+    def test_uses_latest_retail_price_when_order_has_no_application_date(self):
+        self.create_retail_price("250.00", datetime(2025, 1, 3, tzinfo=UTC))
+        order = CustomerOrder.objects.create(
+            customer=self.customer,
+            retail_store=self.store,
+            organization=self.organization,
+        )
+
+        response = self.client.get(
+            reverse("get_latest_retail_price"),
+            {
+                "product_id": self.product.pk,
+                "retail_store_id": self.store.pk,
+                "customer_order_id": order.pk,
+            },
+        )
+
+        self.assertEqual(response.json()["price"], "250.00")

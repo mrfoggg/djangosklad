@@ -87,6 +87,13 @@ function getPriceSource() {
 	};
 }
 
+function getCurrentOrder() {
+	const match = window.location.pathname.match(
+		/\/documents\/(purchaseorder|customerorder)\/(\d+)\/change\/?$/,
+	);
+	return match ? { type: match[1], id: match[2] } : null;
+}
+
 async function updateLatestPrice(productSelect, { showNotification = true } = {}) {
 	const productId = productSelect.value;
 	const priceSource = getPriceSource();
@@ -110,6 +117,12 @@ async function updateLatestPrice(productSelect, { showNotification = true } = {}
 		url.searchParams.append(priceSource.idParameter, priceSource.id);
 	}
 	url.searchParams.append("product_id", productId);
+	const currentOrder = getCurrentOrder();
+	if (currentOrder?.type === "purchaseorder" && !priceSource.isRetail) {
+		url.searchParams.append("purchase_order_id", currentOrder.id);
+	} else if (currentOrder?.type === "customerorder" && priceSource.isRetail) {
+		url.searchParams.append("customer_order_id", currentOrder.id);
+	}
 	if (!priceSource.isRetail && organizationId) {
 		url.searchParams.append("organization_id", organizationId);
 	}

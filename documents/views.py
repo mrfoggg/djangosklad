@@ -5,7 +5,7 @@ from django.views.decorators.http import require_GET
 
 from catalogs.models import Contractor, Product
 
-from .models import PurchaseOrder, RetailPriceItem, SupplierPriceItem
+from .models import CustomerOrder, PurchaseOrder, RetailPriceItem, SupplierPriceItem
 
 
 @staff_member_required
@@ -79,6 +79,11 @@ def get_latest_price_ajax(request):
         .select_related("document", "document__supplier")
         .order_by("-document__dt_applied", "-id")
     )
+
+    if purchase_order_id and purchase_order.dt_applied:
+        price_items = price_items.filter(
+            document__dt_applied__lte=purchase_order.dt_applied
+        )
 
     # У цены для конкретной организации приоритет над общей ценой.
     # Если для организации прайса нет, используем прайс без организации.
@@ -172,6 +177,13 @@ def get_latest_price_ajax(request):
 def get_latest_retail_price_ajax(request):
     retail_store_id = request.GET.get("retail_store_id")
     product_id = request.GET.get("product_id")
+    customer_order_id = request.GET.get("customer_order_id")
+
+    customer_order = None
+    if customer_order_id:
+        customer_order = CustomerOrder.objects.filter(pk=customer_order_id).first()
+        if not customer_order:
+            return JsonResponse({"error": "Customer order not found"}, status=404)
 
     if not product_id:
         return JsonResponse({"error": "Missing product_id"}, status=400)
@@ -185,6 +197,11 @@ def get_latest_retail_price_ajax(request):
         .select_related("document", "document__retail_store")
         .order_by("-document__dt_applied", "-id")
     )
+
+    if customer_order and customer_order.dt_applied:
+        price_items = price_items.filter(
+            document__dt_applied__lte=customer_order.dt_applied
+        )
 
     # Цена конкретного магазина имеет приоритет над общей ценой для всех магазинов.
     item = None
