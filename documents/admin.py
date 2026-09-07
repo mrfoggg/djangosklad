@@ -604,6 +604,8 @@ class PurchaseOrderForm(DocumentForm):
 
 class OrderTotalsAdminMixin:
     total_field = None
+    quantity_field = "items__quantity"
+    product_field = "items__product"
 
     def get_queryset(self, request):
         queryset = super().get_queryset(request)
@@ -615,11 +617,11 @@ class OrderTotalsAdminMixin:
                 output_field=decimal_output,
             ),
             calculated_quantity=Coalesce(
-                Sum("items__quantity"),
+                Sum(self.quantity_field),
                 Value(Decimal("0.00")),
                 output_field=decimal_output,
             ),
-            calculated_product_count=Count("items__product", distinct=True),
+            calculated_product_count=Count(self.product_field, distinct=True),
         )
 
     @admin.display(description=_("Итого, грн"), ordering="calculated_total")
@@ -738,11 +740,35 @@ class PurchaseInvoiceForm(DocumentForm):
 
 
 @admin.register(PurchaseInvoice)
-class PurchaseInvoiceAdmin(BaseDocumentAdmin):
+class PurchaseInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     form = PurchaseInvoiceForm
+    total_field = "items__order_item__purchase_total_price"
+    quantity_field = "items__order_item__quantity"
+    product_field = "items__order_item__product"
+    list_display = (
+        "id",
+        "supplier",
+        "organization",
+        "order_total",
+        "order_quantity",
+        "product_count",
+        "is_applied",
+        "created",
+    )
+    list_display_links = ("id", "supplier")
     list_filter = ("is_applied", "supplier")
-    readonly_fields = BASE_READONLY
-    fields = BASE_FIELDS + ("supplier", "bank_account", "orders", "fill_from_orders")
+    readonly_fields = BASE_READONLY + (
+        "order_total",
+        "order_quantity",
+        "product_count",
+    )
+    fields = BASE_FIELDS + (
+        "supplier",
+        "bank_account",
+        "orders",
+        "fill_from_orders",
+        ("order_total", "order_quantity", "product_count"),
+    )
     filter_horizontal = ("orders",)
     conditional_fields = {
         **BaseDocumentAdmin.conditional_fields,
@@ -874,17 +900,36 @@ class SalesInvoiceForm(DocumentForm):
 
 
 @admin.register(SalesInvoice)
-class SalesInvoiceAdmin(BaseDocumentAdmin):
+class SalesInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     form = SalesInvoiceForm
+    total_field = "items__order_item__customer_total_price"
+    quantity_field = "items__order_item__quantity"
+    product_field = "items__order_item__product"
+    list_display = (
+        "id",
+        "customer",
+        "organization",
+        "order_total",
+        "order_quantity",
+        "product_count",
+        "is_applied",
+        "created",
+    )
+    list_display_links = ("id", "customer")
     list_filter = ("is_applied", "customer", "organization")
     search_fields = ("id", "customer__last_name")
-    readonly_fields = BASE_READONLY
+    readonly_fields = BASE_READONLY + (
+        "order_total",
+        "order_quantity",
+        "product_count",
+    )
     fields = BASE_FIELDS + (
         "customer",
         "bank_account",
         "note",
         "orders",
         "fill_from_orders",
+        ("order_total", "order_quantity", "product_count"),
     )
     filter_horizontal = ("orders",)
     conditional_fields = {
