@@ -618,8 +618,8 @@ class SalesInvoice(BaseDocumentModel):
         super().save(*args, **kwargs)
 
     class Meta:
-        verbose_name = _("Счет на оплату")
-        verbose_name_plural = _("Счета на оплату")
+        verbose_name = _("Счет на оплату покупателю")
+        verbose_name_plural = _("Счета на оплату покупателям")
 
 
 class SalesInvoiceItem(models.Model):
@@ -627,7 +627,7 @@ class SalesInvoiceItem(models.Model):
         SalesInvoice,
         on_delete=models.CASCADE,
         related_name="items",
-        verbose_name=_("Счет на оплату"),
+        verbose_name=_("Счет на оплату покупателю"),
     )
     order_item = models.OneToOneField(
         OrderItem,
@@ -644,8 +644,8 @@ class SalesInvoiceItem(models.Model):
     )
 
     class Meta:
-        verbose_name = _("Позиция счета на оплату")
-        verbose_name_plural = _("Позиции счета на оплату")
+        verbose_name = _("Позиция счета на оплату покупателю")
+        verbose_name_plural = _("Позиции счета на оплату покупателю")
         ordering = ["sort_order"]
 
     def __str__(self):
