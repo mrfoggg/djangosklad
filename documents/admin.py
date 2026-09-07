@@ -582,6 +582,59 @@ class PaymentOutItemInline(TabularInline):
     verbose_name_plural = _("Распределение оплаты по счетам")
 
 
+class OurBankAccountSelectWidget(UnfoldAdminSelectWidget):
+    def create_option(
+        self, name, value, label, selected, index, subindex=None, attrs=None
+    ):
+        option = super().create_option(
+            name, value, label, selected, index, subindex=subindex, attrs=attrs
+        )
+        account = getattr(value, "instance", None)
+        if account is not None:
+            option["attrs"]["data-organization-id"] = account.organization_id
+            option["attrs"]["data-is-default"] = str(account.is_default).lower()
+        return option
+
+
+class ContractorBankAccountSelectWidget(UnfoldAdminSelectWidget):
+    def create_option(
+        self, name, value, label, selected, index, subindex=None, attrs=None
+    ):
+        option = super().create_option(
+            name, value, label, selected, index, subindex=subindex, attrs=attrs
+        )
+        account = getattr(value, "instance", None)
+        if account is not None:
+            option["attrs"]["data-contractor-id"] = account.contractor_id
+            option["attrs"]["data-is-primary"] = str(
+                account.contractor.primary_account_id == account.pk
+            ).lower()
+        return option
+
+
+class PaymentOrderOutForm(DocumentForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        account_field = self.fields.get("our_bank_account")
+        if account_field:
+            account_field.queryset = account_field.queryset.select_related(
+                "organization"
+            )
+        contractor_account_field = self.fields.get("contractor_bank_account")
+        if contractor_account_field:
+            contractor_account_field.queryset = (
+                contractor_account_field.queryset.select_related("contractor")
+            )
+
+    class Meta:
+        model = PaymentOrderOut
+        fields = "__all__"
+        widgets = {
+            "our_bank_account": OurBankAccountSelectWidget(),
+            "contractor_bank_account": ContractorBankAccountSelectWidget(),
+        }
+
+
 @admin.register(SupplierPriceList)
 class SupplierPriceListAdmin(BaseDocumentAdmin):
     form = SupplierPriceListForm
@@ -1044,7 +1097,7 @@ class SalesInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
 
 @admin.register(PaymentOrderOut)
 class PaymentOrderOutAdmin(BaseDocumentAdmin):
-    form = DocumentForm
+    form = PaymentOrderOutForm
     list_display = (
         "id",
         "contractor",
@@ -1060,7 +1113,7 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
     # fields = BASE_FIELDS + ("supplier", "bank_account", "total_debited")
     # Объединяем кортежи, чтобы не потерять системные поля из BaseDocumentAdmin
     fields = BASE_FIELDS[:-1] + (
-        ("organization",),
+        ("organization", "our_bank_account"),
         (
             "contractor",
             "contractor_bank_account",
@@ -1080,6 +1133,13 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
     )
 
     inlines = [PaymentOutItemInline]
+    conditional_fields = {
+        **BaseDocumentAdmin.conditional_fields,
+        "our_bank_account": "organization",
+    }
+
+    class Media:
+        js = ["documents/js/admin_payment_bank_accounts.js"]
 
     def get_queryset(self, request):
         return super().get_queryset(request).annotate(

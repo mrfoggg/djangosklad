@@ -689,6 +689,15 @@ class BaseBankPayment(BaseDocumentModel):
 class PaymentOrderOut(BaseBankPayment):
     """Исходящий платеж (поставщику или возврат покупателю)"""
 
+    our_bank_account = models.ForeignKey(
+        "catalogs.OurBankAccount",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="outgoing_payments",
+        verbose_name=_("С нашего счета"),
+    )
+
     # Связывается со счетами поставщиков
     purchase_invoices = models.ManyToManyField(
         "PurchaseInvoice",
@@ -708,6 +717,86 @@ class PaymentOrderOut(BaseBankPayment):
         db_persist=True,
         verbose_name=_("Всего списано"),
     )
+
+    def clean(self):
+        super().clean()
+        if (
+            self.contractor_bank_account_id
+            and self.contractor_id
+            and self.contractor_bank_account.contractor_id != self.contractor_id
+        ):
+            raise ValidationError(
+                {
+                    "contractor_bank_account": _(
+                        "Банковский счет не принадлежит выбранному контрагенту."
+                    )
+                }
+            )
+
+        if (
+            self.our_bank_account_id
+            and self.organization_id
+            and self.our_bank_account.organization_id != self.organization_id
+        ):
+            raise ValidationError(
+                {
+                    "our_bank_account": _(
+                        "Банковский счет не принадлежит выбранной организации."
+                    )
+                }
+            )
+
+        if self.is_applied and not self.contractor_bank_account_id and self.contractor_id:
+            accounts = self.contractor.bank_accounts.all()
+            if not accounts.exists():
+                raise ValidationError(
+                    {
+                        "is_applied": _(
+                            "Невозможно провести платеж — у контрагента нет банковских счетов."
+                        )
+                    }
+                )
+            if not self.contractor.primary_account_id:
+                raise ValidationError(
+                    {
+                        "contractor_bank_account": _(
+                            "У контрагента есть банковские счета, но основной счет не выбран."
+                        )
+                    }
+                )
+
+        if not self.is_applied or self.our_bank_account_id or not self.organization_id:
+            return
+
+        accounts = self.organization.our_accounts.all()
+        if accounts.filter(is_default=True).exists():
+            return
+        if not accounts.exists():
+            raise ValidationError(
+                {
+                    "is_applied": _(
+                        "Невозможно провести платеж — у организации нет банковских счетов."
+                    )
+                }
+            )
+        raise ValidationError(
+            {
+                "our_bank_account": _(
+                    "У организации есть банковские счета, но основной счет не выбран."
+                )
+            }
+        )
+
+    def save(self, *args, **kwargs):
+        if not self.our_bank_account_id and self.organization_id:
+            self.our_bank_account = self.organization.our_accounts.filter(
+                is_default=True
+            ).first()
+        if not self.contractor_bank_account_id and self.contractor_id:
+            self.contractor_bank_account = self.contractor.bank_accounts.filter(
+                pk=self.contractor.primary_account_id
+            ).first()
+        super().save(*args, **kwargs)
 
     class Meta:
         verbose_name = _("Платеж исходящий")

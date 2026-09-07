@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.forms import modelform_factory
 from django.test import TestCase
 from django.urls import reverse
@@ -9,6 +10,7 @@ from djmoney.money import Money
 
 from catalogs.models import (
     Contractor,
+    ContractorBankAccount,
     MeasurementUnit,
     Organization,
     OurBankAccount,
@@ -20,6 +22,7 @@ from catalogs.models import (
 
 from .admin import (
     OrderItemInlineForm,
+    PaymentOrderOutForm,
     PaymentOutItemInlineForm,
     PurchaseInvoiceItemInlineForm,
     SalesInvoiceItemInlineForm,
@@ -39,6 +42,89 @@ from .models import (
     SupplierPriceItem,
     SupplierPriceList,
 )
+
+
+class PaymentOrderOutBankAccountTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.organization = Organization.objects.create(name="Организация отправителя")
+        cls.other_organization = Organization.objects.create(name="Другая организация")
+        cls.contractor = Contractor.objects.create(last_name="Получатель")
+        cls.default_account = OurBankAccount.objects.create(
+            organization=cls.organization,
+            bank_name="Основной банк",
+            iban="UA111111111111111111111111111",
+            is_default=True,
+        )
+        cls.other_account = OurBankAccount.objects.create(
+            organization=cls.other_organization,
+            bank_name="Чужой банк",
+            iban="UA222222222222222222222222222",
+        )
+        cls.contractor_account = ContractorBankAccount.objects.create(
+            contractor=cls.contractor,
+            bank_name="Банк получателя",
+            iban="UA333333333333333333333333333",
+        )
+        cls.contractor.primary_account = cls.contractor_account
+        cls.contractor.save()
+        cls.other_contractor = Contractor.objects.create(last_name="Другой получатель")
+        cls.other_contractor_account = ContractorBankAccount.objects.create(
+            contractor=cls.other_contractor,
+            bank_name="Банк другого получателя",
+            iban="UA444444444444444444444444444",
+        )
+
+    def test_default_organization_account_is_selected_on_save(self):
+        payment = PaymentOrderOut.objects.create(
+            organization=self.organization,
+            contractor=self.contractor,
+            amount="100.00",
+        )
+
+        self.assertEqual(payment.our_bank_account, self.default_account)
+        self.assertEqual(payment.contractor_bank_account, self.contractor_account)
+
+    def test_account_from_another_organization_is_rejected(self):
+        payment = PaymentOrderOut(
+            organization=self.organization,
+            contractor=self.contractor,
+            amount="100.00",
+            our_bank_account=self.other_account,
+        )
+
+        with self.assertRaises(ValidationError):
+            payment.full_clean()
+
+    def test_account_options_contain_organization_metadata(self):
+        form = PaymentOrderOutForm()
+
+        account_html = str(form["our_bank_account"])
+
+        self.assertIn(
+            f'data-organization-id="{self.organization.pk}"', account_html
+        )
+        self.assertIn('data-is-default="true"', account_html)
+
+    def test_account_from_another_contractor_is_rejected(self):
+        payment = PaymentOrderOut(
+            organization=self.organization,
+            contractor=self.contractor,
+            amount="100.00",
+            our_bank_account=self.default_account,
+            contractor_bank_account=self.other_contractor_account,
+        )
+
+        with self.assertRaises(ValidationError):
+            payment.full_clean()
+
+    def test_contractor_account_options_contain_contractor_metadata(self):
+        form = PaymentOrderOutForm()
+
+        account_html = str(form["contractor_bank_account"])
+
+        self.assertIn(f'data-contractor-id="{self.contractor.pk}"', account_html)
+        self.assertIn('data-is-primary="true"', account_html)
 
 
 class PaymentOutItemTests(TestCase):
