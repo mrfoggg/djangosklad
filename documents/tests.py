@@ -20,6 +20,7 @@ from catalogs.models import (
 
 from .admin import (
     OrderItemInlineForm,
+    PaymentOutItemInlineForm,
     PurchaseInvoiceItemInlineForm,
     SalesInvoiceItemInlineForm,
 )
@@ -86,6 +87,17 @@ class PaymentOutItemTests(TestCase):
 
         self.assertEqual(item.amount, Decimal("60.00"))
 
+    def test_zero_amount_is_filled_with_unpaid_invoice_balance(self):
+        payment = self.create_payment("100.00")
+
+        item = PaymentOutItem.objects.create(
+            payment=payment,
+            invoice=self.invoice,
+            amount=Decimal("0.00"),
+        )
+
+        self.assertEqual(item.amount, Decimal("100.00"))
+
     def test_explicit_amount_is_not_replaced(self):
         payment = self.create_payment("25.00")
 
@@ -97,6 +109,16 @@ class PaymentOutItemTests(TestCase):
         item.refresh_from_db()
 
         self.assertEqual(item.amount, Decimal("25.00"))
+
+    def test_invoice_choice_displays_invoice_total(self):
+        form = PaymentOutItemInlineForm()
+
+        label = form.fields["invoice"].label_from_instance(
+            form.fields["invoice"].queryset.get(pk=self.invoice.pk)
+        )
+
+        self.assertIn("100", label)
+        self.assertIn("грн", label)
 
 
 class OrderItemInlineFormTests(TestCase):

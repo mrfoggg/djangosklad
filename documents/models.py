@@ -728,7 +728,7 @@ class PaymentOutItem(models.Model):
     )
 
     def save(self, *args, **kwargs):
-        if self.amount is None and self.invoice_id:
+        if (self.amount is None or self.amount == 0) and self.invoice_id:
             invoice_total = self.invoice.items.aggregate(
                 total=models.Sum("order_item__purchase_total_price")
             )["total"] or Decimal("0.00")

@@ -545,8 +545,36 @@ class RetailPriceListForm(DocumentForm):
         fields = "__all__"
 
 
+class PaymentOutItemInlineForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        invoice_field = self.fields.get("invoice")
+        if invoice_field:
+            invoice_field.queryset = invoice_field.queryset.annotate(
+                calculated_total=Coalesce(
+                    Sum("items__order_item__purchase_total_price"),
+                    Value(Decimal("0.00")),
+                    output_field=DecimalField(max_digits=20, decimal_places=2),
+                )
+            )
+            invoice_field.label_from_instance = self.invoice_label
+
+    @staticmethod
+    def invoice_label(invoice):
+        total = number_format(invoice.calculated_total, decimal_pos=2, use_l10n=True)
+        return _("%(invoice)s — %(total)s грн") % {
+            "invoice": invoice,
+            "total": total,
+        }
+
+    class Meta:
+        model = PaymentOutItem
+        fields = "__all__"
+
+
 class PaymentOutItemInline(TabularInline):
     model = PaymentOutItem
+    form = PaymentOutItemInlineForm
     extra = 1
     # Фильтруем счета так же, как мы делали ранее:
     # только те, где есть неоплаченные айтемы для этой организации
