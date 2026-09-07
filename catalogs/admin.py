@@ -17,6 +17,7 @@ from .models import (
     ContractorLink,
     MeasurementUnit,
     Organization,
+    OurBankAccount,
     Product,
     ProductSupplier,
     RetailStore,
@@ -45,6 +46,13 @@ class ContractorBankAccountInline(TabularInline):
     extra = 1
     # Для удобства в Unfold можно использовать компактное отображение
     fields = ("bank_name", "iban", "currency")
+    tab = True
+
+
+class OurBankAccountInline(TabularInline):
+    model = OurBankAccount
+    extra = 1
+    fields = ("bank_name", "mfo", "iban", "currency", "is_default", "note")
     tab = True
 
 
@@ -221,6 +229,7 @@ class ContractorAdmin(BaseCatalogAdmin):
 class OrganizationAdmin(BaseCatalogAdmin):
     list_display = ("name", "inn", "is_default")
     list_editable = ("is_default",)
+    inlines = [OurBankAccountInline]
 
 
 @admin.register(MeasurementUnit)
