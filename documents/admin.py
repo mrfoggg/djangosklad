@@ -1045,6 +1045,18 @@ class SalesInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
 @admin.register(PaymentOrderOut)
 class PaymentOrderOutAdmin(BaseDocumentAdmin):
     form = DocumentForm
+    list_display = (
+        "id",
+        "contractor",
+        "organization",
+        "amount",
+        "allocated_amount",
+        "payment_difference",
+        "total_debited",
+        "is_applied",
+        "created",
+    )
+    list_display_links = ("id", "contractor")
     # fields = BASE_FIELDS + ("supplier", "bank_account", "total_debited")
     # Объединяем кортежи, чтобы не потерять системные поля из BaseDocumentAdmin
     fields = BASE_FIELDS[:-1] + (
@@ -1053,11 +1065,55 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
             "contractor",
             "contractor_bank_account",
         ),
-        ("amount", "bank_commission", "total_debited"),
+        (
+            "amount",
+            "allocated_amount",
+            "payment_difference",
+            "bank_commission",
+            "total_debited",
+        ),
     )
-    readonly_fields = BaseDocumentAdmin.readonly_fields + ("total_debited",)
+    readonly_fields = BaseDocumentAdmin.readonly_fields + (
+        "allocated_amount",
+        "payment_difference",
+        "total_debited",
+    )
 
     inlines = [PaymentOutItemInline]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            calculated_allocated_amount=Coalesce(
+                Sum("paymentoutitem__amount"),
+                Value(Decimal("0.00")),
+                output_field=DecimalField(max_digits=20, decimal_places=2),
+            )
+        )
+
+    @admin.display(
+        description=_("Распределено по счетам"),
+        ordering="calculated_allocated_amount",
+    )
+    def allocated_amount(self, obj):
+        amount = getattr(obj, "calculated_allocated_amount", Decimal("0.00"))
+        return number_format(amount, decimal_pos=2, use_l10n=True)
+
+    @admin.display(description=_("Расхождение"))
+    def payment_difference(self, obj):
+        payment_amount = getattr(obj, "amount", None) or Decimal("0.00")
+        allocated_amount = getattr(
+            obj, "calculated_allocated_amount", Decimal("0.00")
+        )
+        difference = payment_amount - allocated_amount
+        formatted_difference = number_format(
+            abs(difference), decimal_pos=2, use_l10n=True
+        )
+
+        if difference > 0:
+            return _("Переплата: %(amount)s грн") % {"amount": formatted_difference}
+        if difference < 0:
+            return _("Недоплата: %(amount)s грн") % {"amount": formatted_difference}
+        return _("Без расхождений")
 
     def save_model(self, request, obj, form, change):
         # Здесь в будущем можно добавить логику проверки:
