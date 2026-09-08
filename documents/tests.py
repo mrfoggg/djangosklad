@@ -1,10 +1,11 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.forms import modelform_factory
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from djmoney.money import Money
 
@@ -23,6 +24,7 @@ from catalogs.models import (
 from .admin import (
     OrderItemInlineForm,
     PaymentOrderOutForm,
+    PaymentOutItemInline,
     PaymentOutItemInlineForm,
     PurchaseInvoiceItemInlineForm,
     SalesInvoiceItemInlineForm,
@@ -130,6 +132,10 @@ class PaymentOrderOutBankAccountTests(TestCase):
 class PaymentOutItemTests(TestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.admin_user = get_user_model().objects.create_superuser(
+            username="payment-admin",
+            password="test-password",
+        )
         cls.organization = Organization.objects.create(name="Организация платежа")
         cls.supplier = Contractor.objects.create(
             last_name="Поставщик для оплаты", is_supplier=True
@@ -205,6 +211,49 @@ class PaymentOutItemTests(TestCase):
 
         self.assertIn("100", label)
         self.assertIn("грн", label)
+
+    def get_payment_status(self, item):
+        inline = PaymentOutItemInline(PaymentOrderOut, admin.site)
+        request = RequestFactory().get("/")
+        request.user = self.admin_user
+        annotated_item = inline.get_queryset(request).get(pk=item.pk)
+        return str(inline.payment_status(annotated_item))
+
+    def test_inline_displays_underpayment_for_draft_payment(self):
+        payment = self.create_payment("25.00")
+        item = PaymentOutItem.objects.create(
+            payment=payment,
+            invoice=self.invoice,
+            amount="25.00",
+        )
+
+        status = self.get_payment_status(item)
+
+        self.assertIn("Недоплата", status)
+        self.assertIn("75", status)
+
+    def test_inline_displays_paid_for_fully_paid_invoice(self):
+        payment = self.create_payment("100.00", is_applied=True)
+        item = PaymentOutItem.objects.create(
+            payment=payment,
+            invoice=self.invoice,
+            amount="100.00",
+        )
+
+        self.assertIn("Оплачено", self.get_payment_status(item))
+
+    def test_inline_displays_overpayment(self):
+        payment = self.create_payment("120.00", is_applied=True)
+        item = PaymentOutItem.objects.create(
+            payment=payment,
+            invoice=self.invoice,
+            amount="120.00",
+        )
+
+        status = self.get_payment_status(item)
+
+        self.assertIn("Переплата", status)
+        self.assertIn("20", status)
 
 
 class OrderItemInlineFormTests(TestCase):

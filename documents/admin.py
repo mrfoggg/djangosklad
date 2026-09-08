@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django import forms
 from django.contrib import admin
-from django.db.models import Count, DecimalField, Q, Sum, Value
+from django.db.models import Count, DecimalField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.forms.models import BaseInlineFormSet
 from django.urls import reverse
@@ -576,10 +576,69 @@ class PaymentOutItemInline(TabularInline):
     model = PaymentOutItem
     form = PaymentOutItemInlineForm
     extra = 1
+    readonly_fields = ("payment_status",)
     # Фильтруем счета так же, как мы делали ранее:
     # только те, где есть неоплаченные айтемы для этой организации
     verbose_name = _("Оплачиваемый счет")
     verbose_name_plural = _("Распределение оплаты по счетам")
+
+    def get_queryset(self, request):
+        decimal_field = DecimalField(max_digits=20, decimal_places=2)
+        invoice_total = (
+            InvoiceItem.objects.filter(invoice_id=OuterRef("invoice_id"))
+            .values("invoice_id")
+            .annotate(total=Sum("order_item__purchase_total_price"))
+            .values("total")[:1]
+        )
+        paid_total = (
+            PaymentOutItem.objects.filter(
+                invoice_id=OuterRef("invoice_id"),
+                payment__is_applied=True,
+            )
+            .values("invoice_id")
+            .annotate(total=Sum("amount"))
+            .values("total")[:1]
+        )
+        return super().get_queryset(request).select_related("payment").annotate(
+            calculated_invoice_total=Coalesce(
+                Subquery(invoice_total, output_field=decimal_field),
+                Value(Decimal("0.00")),
+                output_field=decimal_field,
+            ),
+            calculated_paid_total=Coalesce(
+                Subquery(paid_total, output_field=decimal_field),
+                Value(Decimal("0.00")),
+                output_field=decimal_field,
+            ),
+        )
+
+    @admin.display(description=_("Состояние оплаты"))
+    def payment_status(self, obj):
+        if not obj or not obj.pk or not obj.invoice_id:
+            return "—"
+
+        invoice_total = getattr(obj, "calculated_invoice_total", Decimal("0.00"))
+        paid_total = getattr(obj, "calculated_paid_total", Decimal("0.00"))
+        if not obj.payment.is_applied:
+            paid_total += obj.amount or Decimal("0.00")
+
+        difference = paid_total - invoice_total
+        if difference < 0:
+            amount = number_format(-difference, decimal_pos=2, use_l10n=True)
+            return format_html(
+                '<span class="text-orange-600 dark:text-orange-400">{}</span>',
+                _("Недоплата: %(amount)s грн") % {"amount": amount},
+            )
+        if difference > 0:
+            amount = number_format(difference, decimal_pos=2, use_l10n=True)
+            return format_html(
+                '<span class="text-red-600 dark:text-red-400">{}</span>',
+                _("Переплата: %(amount)s грн") % {"amount": amount},
+            )
+        return format_html(
+            '<span class="text-green-600 dark:text-green-400">{}</span>',
+            _("Оплачено"),
+        )
 
 
 class OurBankAccountSelectWidget(UnfoldAdminSelectWidget):
