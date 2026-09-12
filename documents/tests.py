@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.forms import modelform_factory
+from django.forms import inlineformset_factory, modelform_factory
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from djmoney.money import Money
@@ -26,6 +26,7 @@ from .admin import (
     PaymentOrderOutForm,
     PaymentOutItemInline,
     PaymentOutItemInlineForm,
+    PaymentOutItemInlineFormSet,
     PurchaseInvoiceItemInlineForm,
     SalesInvoiceItemInlineForm,
 )
@@ -254,6 +255,152 @@ class PaymentOutItemTests(TestCase):
 
         self.assertIn("Переплата", status)
         self.assertIn("20", status)
+
+
+class PaymentAllocationValidationTests(PaymentOutItemTests):
+    def formset(self, payment, rows, **parent):
+        payment.amount = Decimal(payment.amount)
+        factory = inlineformset_factory(
+            PaymentOrderOut, PaymentOutItem,
+            form=PaymentOutItemInlineForm, formset=PaymentOutItemInlineFormSet,
+            fields=("invoice", "amount"), extra=0,
+        )
+        initial = payment.paymentoutitem_set.count() if payment.pk else 0
+        data = {
+            "contractor": str(payment.contractor_id),
+            "organization": str(payment.organization_id),
+            "paymentoutitem_set-TOTAL_FORMS": str(len(rows)),
+            "paymentoutitem_set-INITIAL_FORMS": str(initial),
+            **parent,
+        }
+        for i, row in enumerate(rows):
+            for key, value in row.items():
+                data[f"paymentoutitem_set-{i}-{key}"] = str(value)
+        return factory(data=data, instance=payment)
+
+    def test_automatic_allocation_cannot_exceed_payment(self):
+        for amount in ("", "0", "101"):
+            with self.subTest(amount=amount):
+                payment = self.create_payment("50.00")
+                forms = self.formset(payment, [{"invoice": self.invoice.pk, "amount": amount}])
+                self.assertFalse(forms.is_valid())
+                self.assertIn("больше суммы платежа", str(forms.non_form_errors()))
+
+    def test_partial_allocation_and_unallocated_balance_are_allowed(self):
+        payment = self.create_payment("100.00")
+        forms = self.formset(payment, [{"invoice": self.invoice.pk, "amount": "40"}])
+        self.assertTrue(forms.is_valid(), forms.errors)
+        forms.save()
+        self.assertEqual(payment.paymentoutitem_set.get().amount, Decimal("40"))
+
+    def test_foreign_supplier_and_organization_are_rejected(self):
+        payment = self.create_payment("100.00")
+        other_supplier = Contractor.objects.create(last_name="Чужой", is_supplier=True)
+        other_org = Organization.objects.create(name="Чужая")
+        for field, value in (("supplier", other_supplier), ("organization", other_org)):
+            with self.subTest(field=field):
+                setattr(self.invoice, field, value)
+                self.invoice.save()
+                forms = self.formset(payment, [{"invoice": self.invoice.pk, "amount": "10"}])
+                self.assertFalse(forms.is_valid())
+                self.assertIn("invoice", forms.errors[0])
+                self.invoice.supplier = self.supplier
+                self.invoice.organization = self.organization
+                self.invoice.save()
+
+    def test_fully_paid_invoice_is_rejected_for_new_row(self):
+        paid = self.create_payment("100.00", is_applied=True)
+        PaymentOutItem.objects.create(payment=paid, invoice=self.invoice, amount="100")
+        payment = self.create_payment("100.00")
+        forms = self.formset(payment, [{"invoice": self.invoice.pk, "amount": "10"}])
+        self.assertFalse(forms.is_valid())
+        self.assertIn("invoice", forms.errors[0])
+
+    def test_existing_fully_paid_invoice_can_be_edited(self):
+        payment = self.create_payment("100.00", is_applied=True)
+        item = PaymentOutItem.objects.create(payment=payment, invoice=self.invoice, amount="100")
+        forms = self.formset(payment, [{"id": item.pk, "invoice": self.invoice.pk, "amount": "0"}])
+        self.assertTrue(forms.is_valid(), forms.errors)
+        forms.save()
+        item.refresh_from_db()
+        self.assertEqual(item.amount, Decimal("100"))
+
+    def test_deleted_allocation_is_excluded(self):
+        payment = self.create_payment("100.00", is_applied=True)
+        item = PaymentOutItem.objects.create(payment=payment, invoice=self.invoice, amount="100")
+        forms = self.formset(payment, [
+            {"id": item.pk, "invoice": self.invoice.pk, "amount": "100", "DELETE": "on"},
+            {"invoice": self.invoice.pk, "amount": ""},
+        ])
+        self.assertTrue(forms.is_valid(), forms.errors)
+        forms.save()
+        self.assertEqual(payment.paymentoutitem_set.get().amount, Decimal("100"))
+
+    def test_combined_rows_cannot_exceed_payment(self):
+        payment = self.create_payment("100.00")
+        forms = self.formset(payment, [
+            {"invoice": self.invoice.pk, "amount": "60"},
+            {"invoice": self.invoice.pk, "amount": "60"},
+        ])
+        self.assertFalse(forms.is_valid())
+
+    def test_negative_allocation_is_rejected(self):
+        payment = self.create_payment("100.00")
+        forms = self.formset(payment, [{"invoice": self.invoice.pk, "amount": "-1"}])
+        self.assertFalse(forms.is_valid())
+        self.assertIn("amount", forms.errors[0])
+
+    def test_automatic_zero_is_not_recalculated_during_save(self):
+        payment = self.create_payment("100.00")
+        forms = self.formset(payment, [
+            {"invoice": self.invoice.pk, "amount": "100"},
+            {"invoice": self.invoice.pk, "amount": ""},
+        ])
+        self.assertTrue(forms.is_valid(), forms.errors)
+        forms.save()
+        self.assertEqual(
+            sum(payment.paymentoutitem_set.values_list("amount", flat=True)),
+            Decimal("100"),
+        )
+
+    def test_admin_rejects_excess_and_saves_valid_automatic_allocation(self):
+        self.client.force_login(self.admin_user)
+        data = {
+            "organization": self.organization.pk,
+            "contractor": self.supplier.pk,
+            "amount": "50.00",
+            "bank_commission": "0",
+            "category": PaymentOrderOut.Category.GOODS,
+            "paymentoutitem_set-TOTAL_FORMS": "1",
+            "paymentoutitem_set-INITIAL_FORMS": "0",
+            "paymentoutitem_set-0-invoice": self.invoice.pk,
+            "paymentoutitem_set-0-amount": "",
+            "_save": "Сохранить",
+        }
+        url = reverse("admin:documents_paymentorderout_add")
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "больше суммы платежа")
+        self.assertFalse(PaymentOrderOut.objects.exists())
+        data["amount"] = "100.00"
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(PaymentOutItem.objects.get().amount, Decimal("100"))
+
+    def test_reducing_payment_below_unchanged_rows_is_rejected(self):
+        payment = self.create_payment("100.00")
+        item = PaymentOutItem.objects.create(payment=payment, invoice=self.invoice, amount="100")
+        payment.amount = Decimal("50")
+        forms = self.formset(payment, [
+            {"id": item.pk, "invoice": self.invoice.pk, "amount": "100"},
+        ])
+        self.assertFalse(forms.is_valid())
+        self.assertIn("больше суммы платежа", str(forms.non_form_errors()))
+
+    def test_invoice_options_include_filter_metadata(self):
+        html = str(PaymentOutItemInlineForm()["invoice"])
+        self.assertIn(f'data-supplier-id="{self.supplier.pk}"', html)
+        self.assertIn(f'data-organization-id="{self.organization.pk}"', html)
 
 
 class OrderItemInlineFormTests(TestCase):

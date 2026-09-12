@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django import forms
 from django.contrib import admin
-from django.db.models import Count, DecimalField, OuterRef, Q, Subquery, Sum, Value
+from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from django.forms.models import BaseInlineFormSet
 from django.urls import reverse
@@ -545,8 +545,21 @@ class RetailPriceListForm(DocumentForm):
         fields = "__all__"
 
 
+class PaymentInvoiceSelectWidget(UnfoldAdminSelectWidget):
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(
+            name, value, label, selected, index, subindex=subindex, attrs=attrs
+        )
+        invoice = getattr(value, "instance", None)
+        if invoice is not None:
+            option["attrs"]["data-supplier-id"] = invoice.supplier_id
+            option["attrs"]["data-organization-id"] = invoice.organization_id
+        return option
+
+
 class PaymentOutItemInlineForm(forms.ModelForm):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, payment=None, **kwargs):
+        self.payment = payment
         super().__init__(*args, **kwargs)
         invoice_field = self.fields.get("invoice")
         if invoice_field:
@@ -557,7 +570,33 @@ class PaymentOutItemInlineForm(forms.ModelForm):
                     output_field=DecimalField(max_digits=20, decimal_places=2),
                 )
             )
+            paid = PaymentOutItem.objects.filter(
+                invoice_id=OuterRef("pk"), payment__is_applied=True
+            )
+            if payment is not None and payment.pk:
+                paid = paid.exclude(payment_id=payment.pk)
+            paid = paid.order_by().values("invoice_id").annotate(total=Sum("amount"))
+            invoice_field.queryset = invoice_field.queryset.annotate(
+                calculated_paid=Coalesce(
+                    Subquery(paid.values("total")[:1]), Value(Decimal("0.00")),
+                    output_field=DecimalField(max_digits=20, decimal_places=2),
+                )
+            ).filter(
+                Q(calculated_total__gt=F("calculated_paid"))
+                | Q(pk=self.instance.invoice_id)
+            )
             invoice_field.label_from_instance = self.invoice_label
+
+    def clean_invoice(self):
+        invoice = self.cleaned_data["invoice"]
+        if self.payment is not None and (
+            invoice.supplier_id != self.payment.contractor_id
+            or invoice.organization_id != self.payment.organization_id
+        ):
+            raise forms.ValidationError(
+                _("Счет должен принадлежать контрагенту и организации платежа.")
+            )
+        return invoice
 
     @staticmethod
     def invoice_label(invoice):
@@ -570,15 +609,92 @@ class PaymentOutItemInlineForm(forms.ModelForm):
     class Meta:
         model = PaymentOutItem
         fields = "__all__"
+        widgets = {"invoice": PaymentInvoiceSelectWidget()}
+
+
+class PaymentOutItemInlineFormSet(BaseInlineFormSet):
+    # Amounts, including zero, have already been resolved by clean().
+    def save_new(self, form, commit=True):
+        obj = super().save_new(form, commit=False)
+        if commit:
+            obj.save(resolve_amount=False)
+        return obj
+
+    def save_existing(self, form, instance, commit=True):
+        obj = super().save_existing(form, instance, commit=False)
+        if commit:
+            obj.save(resolve_amount=False)
+        return obj
+
+    def get_form_kwargs(self, index):
+        kwargs = super().get_form_kwargs(index)
+        # The parent form is validated after formset construction in Django admin.
+        payment = PaymentOrderOut(pk=self.instance.pk, organization_id=None)
+        for field in ("contractor", "organization"):
+            value = self.data.get(field) if self.is_bound else getattr(
+                self.instance, f"{field}_id", None
+            )
+            try:
+                value = int(value) if value else None
+            except (TypeError, ValueError):
+                value = None
+            setattr(payment, f"{field}_id", value)
+        kwargs["payment"] = payment
+        return kwargs
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        allocated = Decimal("0.00")
+        balances = {}
+        for form in self.forms:
+            data = form.cleaned_data
+            if not data or data.get("DELETE"):
+                continue
+            invoice = data.get("invoice")
+            if invoice is None:
+                continue
+            if (
+                invoice.supplier_id != self.instance.contractor_id
+                or invoice.organization_id != self.instance.organization_id
+            ):
+                form.add_error("invoice", _("Счет должен принадлежать контрагенту и организации платежа."))
+                continue
+            amount = data.get("amount")
+            if amount is not None and amount < 0:
+                form.add_error("amount", _("Сумма оплаты не может быть отрицательной."))
+                continue
+            if invoice.pk not in balances:
+                total = invoice.items.aggregate(
+                    total=Sum("order_item__purchase_total_price")
+                )["total"] or Decimal("0.00")
+                paid = PaymentOutItem.objects.filter(
+                    invoice=invoice, payment__is_applied=True
+                )
+                if self.instance.pk:
+                    paid = paid.exclude(payment_id=self.instance.pk)
+                paid_total = paid.aggregate(total=Sum("amount"))["total"]
+                balances[invoice.pk] = total - (paid_total or Decimal("0.00"))
+            if amount is None or amount == 0:
+                amount = max(balances[invoice.pk], Decimal("0.00"))
+            balances[invoice.pk] -= amount
+            data["amount"] = amount
+            form.instance.amount = amount
+            allocated += amount
+        if self.instance.amount is not None and allocated > self.instance.amount:
+            raise forms.ValidationError(
+                _("Распределено по счетам %(allocated)s грн — больше суммы платежа %(amount)s грн."),
+                params={"allocated": allocated, "amount": self.instance.amount},
+            )
 
 
 class PaymentOutItemInline(TabularInline):
     model = PaymentOutItem
     form = PaymentOutItemInlineForm
+    formset = PaymentOutItemInlineFormSet
     extra = 1
     readonly_fields = ("payment_status",)
-    # Фильтруем счета так же, как мы делали ранее:
-    # только те, где есть неоплаченные айтемы для этой организации
     verbose_name = _("Оплачиваемый счет")
     verbose_name_plural = _("Распределение оплаты по счетам")
 
@@ -1161,6 +1277,7 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
         "id",
         "contractor",
         "organization",
+        "category",
         "amount",
         "allocated_amount",
         "payment_difference",
@@ -1169,9 +1286,11 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
         "created",
     )
     list_display_links = ("id", "contractor")
+    list_filter = ("category", "is_applied")
     # fields = BASE_FIELDS + ("supplier", "bank_account", "total_debited")
     # Объединяем кортежи, чтобы не потерять системные поля из BaseDocumentAdmin
     fields = BASE_FIELDS[:-1] + (
+        "category",
         ("organization", "our_bank_account"),
         (
             "contractor",
@@ -1233,8 +1352,3 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
         if difference < 0:
             return _("Недоплата: %(amount)s грн") % {"amount": formatted_difference}
         return _("Без расхождений")
-
-    def save_model(self, request, obj, form, change):
-        # Здесь в будущем можно добавить логику проверки:
-        # сумма всех PaymentOutItem не должна превышать obj.amount
-        super().save_model(request, obj, form, change)

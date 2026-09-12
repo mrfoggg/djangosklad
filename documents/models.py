@@ -689,6 +689,18 @@ class BaseBankPayment(BaseDocumentModel):
 class PaymentOrderOut(BaseBankPayment):
     """Исходящий платеж (поставщику или возврат покупателю)"""
 
+    class Category(models.TextChoices):
+        GOODS = "goods", _("За товары")
+        SERVICES = "services", _("За услуги")
+        CUSTOMER_REFUND = "customer_refund", _("Возврат покупателю")
+
+    category = models.CharField(
+        _("Категория платежа"),
+        max_length=20,
+        choices=Category.choices,
+        default=Category.GOODS,
+    )
+
     our_bank_account = models.ForeignKey(
         "catalogs.OurBankAccount",
         on_delete=models.PROTECT,
@@ -816,8 +828,8 @@ class PaymentOutItem(models.Model):
         verbose_name=_("Сумма оплаты"),
     )
 
-    def save(self, *args, **kwargs):
-        if (self.amount is None or self.amount == 0) and self.invoice_id:
+    def save(self, *args, resolve_amount=True, **kwargs):
+        if resolve_amount and (self.amount is None or self.amount == 0) and self.invoice_id:
             invoice_total = self.invoice.items.aggregate(
                 total=models.Sum("order_item__purchase_total_price")
             )["total"] or Decimal("0.00")

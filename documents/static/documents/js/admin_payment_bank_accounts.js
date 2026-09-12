@@ -98,3 +98,29 @@ if (document.readyState === "loading") {
 } else {
 	initializeBankAccountFilters();
 }
+
+function filterPaymentInvoices() {
+    const contractorId = document.getElementById("id_contractor")?.value;
+    const organizationId = document.getElementById("id_organization")?.value;
+    for (const select of document.querySelectorAll('select[name^="paymentoutitem_set-"][name$="-invoice"]')) {
+        for (const option of select.options) {
+            const available = !option.value || (
+                Boolean(contractorId) && Boolean(organizationId) &&
+                option.dataset.supplierId === contractorId &&
+                option.dataset.organizationId === organizationId
+            );
+            option.hidden = !available;
+            option.disabled = !available;
+            if (!available && option.selected) select.value = "";
+        }
+    }
+}
+document.addEventListener("change", (event) => {
+    if (["id_contractor", "id_organization"].includes(event.target?.id)) filterPaymentInvoices();
+});
+document.addEventListener("formset:added", filterPaymentInvoices);
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", filterPaymentInvoices);
+} else {
+    filterPaymentInvoices();
+}
