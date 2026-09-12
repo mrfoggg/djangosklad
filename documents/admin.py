@@ -2,8 +2,8 @@ from decimal import Decimal
 
 from django import forms
 from django.contrib import admin
-from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value, Window
+from django.db.models.functions import Coalesce, RowNumber
 from django.forms.models import BaseInlineFormSet
 from django.urls import reverse
 from django.utils.formats import number_format
@@ -281,6 +281,7 @@ class PurchaseOrderItemInline(TabularInline):
     extra = 0
     # tab = True
     fields = (
+        "position_number",
         "sort_order_purchase",
         "product",
         "purchase_price",
@@ -294,14 +295,22 @@ class PurchaseOrderItemInline(TabularInline):
         "warehouse",
         "get_invoice_link",
     )
-    ordering = ("sort_order_purchase",)
-    readonly_fields = ("purchase_total_price", "get_invoice_link", "received_quantity", "remaining_quantity")
+    ordering = ("sort_order_purchase", "pk")
+    readonly_fields = ("position_number", "purchase_total_price", "get_invoice_link", "received_quantity", "remaining_quantity")
+
+    @admin.display(description=_("№"))
+    def position_number(self, obj):
+        return format_html('<span class="purchase-position-number">{}</span>', getattr(obj, "calculated_position_number", "—"))
 
     def get_queryset(self, request):
         received = GoodsReceiptItem.objects.filter(
             order_item_id=OuterRef("pk"), receipt__is_applied=True,
         ).order_by().values("order_item_id").annotate(total=Sum("quantity"))
         return super().get_queryset(request).annotate(
+            calculated_position_number=Window(
+                expression=RowNumber(), partition_by=[F("purchase_order_id")],
+                order_by=[F("sort_order_purchase").asc(), F("pk").asc()],
+            ),
             calculated_received=Coalesce(
                 Subquery(received.values("total")[:1]), Value(Decimal("0")),
                 output_field=DecimalField(max_digits=14, decimal_places=6),
@@ -1040,7 +1049,7 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_price_fetch.js",
             "documents/js/admin_quantity_step.js",
-            "documents/js/admin_sortable_init.js",
+            "documents/js/admin_sortable_init.js?v=2",
         ]
 
 
@@ -1090,7 +1099,7 @@ class CustomerOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_price_fetch.js",
             "documents/js/admin_quantity_step.js",
-            "documents/js/admin_sortable_init.js",
+            "documents/js/admin_sortable_init.js?v=2",
         ]
 
 
@@ -1150,7 +1159,7 @@ class PurchaseInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     class Media:
         js = [
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
-            "documents/js/admin_sortable_init.js",
+            "documents/js/admin_sortable_init.js?v=2",
             "documents/js/admin_quantity_step.js",
         ]
 
@@ -1371,7 +1380,7 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
         js = [
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_payment_bank_accounts.js",
-            "documents/js/admin_sortable_init.js",
+            "documents/js/admin_sortable_init.js?v=2",
         ]
 
     def get_queryset(self, request):
@@ -1558,6 +1567,6 @@ class GoodsReceiptAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     class Media:
         js = [
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
-            "documents/js/admin_sortable_init.js",
+            "documents/js/admin_sortable_init.js?v=2",
             "documents/js/admin_quantity_step.js",
         ]

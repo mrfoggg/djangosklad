@@ -1,9 +1,32 @@
-document.addEventListener("DOMContentLoaded", function () {
+function initializeInlineSorting() {
 	// const isApplied = document.getElementById("id_is_applied").checked;
 	// if (isApplied) return;
 
 	const inlinesTable = document.querySelector("#items-data, #paymentoutitem_set-data");
-	if (!inlinesTable || typeof Sortable === "undefined") return;
+	if (!inlinesTable) return;
+
+	const updatePositionNumbers = () => {
+		let number = 0;
+		Array.from(inlinesTable.children)
+			.filter((row) => row.matches("tbody:not(.empty-form)"))
+			.forEach((row) => {
+				const label = row.querySelector(".purchase-position-number");
+				if (!label) return;
+				const deleted = row.querySelector('input[name$="-DELETE"]:checked');
+				const value = deleted ? "—" : String(++number);
+				if (label.textContent !== value) label.textContent = value;
+			});
+	};
+	updatePositionNumbers();
+	if (inlinesTable.querySelector(".purchase-position-number")) {
+		new MutationObserver(updatePositionNumbers).observe(inlinesTable, {
+			childList: true, subtree: true,
+		});
+		inlinesTable.addEventListener("change", (event) => {
+			if (event.target.matches('input[name$="-DELETE"]')) updatePositionNumbers();
+		});
+	}
+	if (typeof Sortable === "undefined") return;
 
 	const injectDragHandles = () => {
 		const sortInputs = inlinesTable.querySelectorAll('input[id*="sort_order"]');
@@ -30,6 +53,7 @@ document.addEventListener("DOMContentLoaded", function () {
 	injectDragHandles();
 
 	const updateOrder = () => {
+		updatePositionNumbers();
 		Array.from(inlinesTable.children)
 			.filter((row) => row.matches("tbody:not(.empty-form)"))
 			.forEach((row, index) => {
@@ -50,4 +74,10 @@ document.addEventListener("DOMContentLoaded", function () {
 		inlinesTable.closest("form")?.addEventListener("submit", updateOrder);
 	}
 	document.addEventListener("formset:added", injectDragHandles);
-});
+}
+
+if (document.readyState === "loading") {
+	document.addEventListener("DOMContentLoaded", initializeInlineSorting);
+} else {
+	initializeInlineSorting();
+}

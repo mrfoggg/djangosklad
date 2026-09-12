@@ -270,3 +270,27 @@ class GoodsReceiptTests(TestCase):
         request.user = self.user
         receipt = admin.site._registry[GoodsReceipt].get_queryset(request).get()
         self.assertEqual(receipt.calculated_total, Decimal("75.00"))
+
+    def test_order_position_numbers_are_rendered_without_javascript(self):
+        from django.contrib import admin
+        from django.test import RequestFactory
+        from documents.admin import PurchaseOrderItemInline
+
+        second = OrderItem.objects.create(
+            purchase_order=self.order, organization=self.organization,
+            product=self.product, warehouse=self.warehouse,
+            quantity=1, purchase_price=10, sort_order_purchase=8,
+        )
+        third = OrderItem.objects.create(
+            purchase_order=self.order, organization=self.organization,
+            product=self.product, warehouse=self.warehouse,
+            quantity=1, purchase_price=10, sort_order_purchase=3,
+        )
+        inline = PurchaseOrderItemInline(PurchaseOrder, admin.site)
+        request = RequestFactory().get("/")
+        request.user = self.user
+        rows = list(inline.get_queryset(request).filter(purchase_order=self.order))
+        self.assertEqual([row.pk for row in rows], [self.item.pk, third.pk, second.pk])
+        self.assertEqual([row.calculated_position_number for row in rows], [1, 2, 3])
+        for number, row in enumerate(rows, 1):
+            self.assertIn(f'>{number}</span>', str(inline.position_number(row)))
