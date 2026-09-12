@@ -610,6 +610,7 @@ class PaymentOutItemInlineForm(forms.ModelForm):
         model = PaymentOutItem
         fields = "__all__"
         widgets = {"invoice": PaymentInvoiceSelectWidget()}
+        labels = {"sort_order": "⇅"}
 
 
 class PaymentOutItemInlineFormSet(BaseInlineFormSet):
@@ -693,6 +694,8 @@ class PaymentOutItemInline(TabularInline):
     model = PaymentOutItem
     form = PaymentOutItemInlineForm
     formset = PaymentOutItemInlineFormSet
+    fields = ("sort_order", "invoice", "amount", "payment_status")
+    ordering = ("sort_order", "pk")
     extra = 1
     readonly_fields = ("payment_status",)
     verbose_name = _("Оплачиваемый счет")
@@ -1321,7 +1324,11 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
     }
 
     class Media:
-        js = ["documents/js/admin_payment_bank_accounts.js"]
+        js = [
+            "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
+            "documents/js/admin_payment_bank_accounts.js",
+            "documents/js/admin_sortable_init.js",
+        ]
 
     def get_queryset(self, request):
         return super().get_queryset(request).annotate(

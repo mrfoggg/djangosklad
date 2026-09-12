@@ -2,8 +2,8 @@ document.addEventListener("DOMContentLoaded", function () {
 	// const isApplied = document.getElementById("id_is_applied").checked;
 	// if (isApplied) return;
 
-	const inlinesTable = document.querySelector("#items-data");
-	if (!inlinesTable) return;
+	const inlinesTable = document.querySelector("#items-data, #paymentoutitem_set-data");
+	if (!inlinesTable || typeof Sortable === "undefined") return;
 
 	const injectDragHandles = () => {
 		const sortInputs = inlinesTable.querySelectorAll('input[id*="sort_order"]');
@@ -29,21 +29,25 @@ document.addEventListener("DOMContentLoaded", function () {
 	// 1. Инициализация при загрузке
 	injectDragHandles();
 
-	// 2. Настройка SortableJS
-	// В Unfold #items-data — это обычно контейнер строк (tbody или обертка)
+	const updateOrder = () => {
+		Array.from(inlinesTable.children)
+			.filter((row) => row.matches("tbody:not(.empty-form)"))
+			.forEach((row, index) => {
+				const input = row.querySelector('input[id*="sort_order"]');
+				const invoice = row.querySelector('select[name$="-invoice"]');
+				// Do not turn the unused extra payment row into a changed form.
+				if (input && (!invoice || invoice.value)) input.value = index;
+			});
+	};
+
 	Sortable.create(inlinesTable, {
 		handle: ".drag-handler",
+		draggable: "tbody:not(.empty-form)",
 		animation: 150,
-		onEnd: function () {
-			// Пересчитываем индексы для всех полей в колонке
-			inlinesTable.querySelectorAll("tbody:not(.template)").forEach((row, index) => {
-				const input = row.querySelector('input[id*="sort_order"]');
-				// console.log("input: ", input, "index: ", index);
-				if (input) {
-					input.value = index;
-					console.log(`New index for row ${index}: ${input.value}`);
-				}
-			});
-		},
+		onEnd: updateOrder,
 	});
+	if (inlinesTable.id === "paymentoutitem_set-data") {
+		inlinesTable.closest("form")?.addEventListener("submit", updateOrder);
+	}
+	document.addEventListener("formset:added", injectDragHandles);
 });

@@ -824,6 +824,9 @@ class PaymentOrderOut(BaseBankPayment):
 
 
 class PaymentOutItem(models.Model):
+    sort_order = models.PositiveIntegerField(
+        _("Порядок"), default=0, blank=True, null=True, db_index=True
+    )
     payment = models.ForeignKey(PaymentOrderOut, on_delete=models.CASCADE)
     invoice = models.ForeignKey(PurchaseInvoice, on_delete=models.CASCADE)
 
@@ -857,3 +860,4 @@ class PaymentOutItem(models.Model):
     class Meta:
         verbose_name = _("Оплата счета")
         verbose_name_plural = _("Оплата счетов")
+        ordering = ("sort_order", "pk")

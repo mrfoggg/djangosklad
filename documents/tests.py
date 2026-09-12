@@ -263,7 +263,7 @@ class PaymentAllocationValidationTests(PaymentOutItemTests):
         factory = inlineformset_factory(
             PaymentOrderOut, PaymentOutItem,
             form=PaymentOutItemInlineForm, formset=PaymentOutItemInlineFormSet,
-            fields=("invoice", "amount"), extra=0,
+            fields=("sort_order", "invoice", "amount"), extra=0,
         )
         initial = payment.paymentoutitem_set.count() if payment.pk else 0
         data = {
@@ -404,6 +404,29 @@ class PaymentAllocationValidationTests(PaymentOutItemTests):
         ])
         self.assertFalse(forms.is_valid())
         self.assertIn("больше суммы платежа", str(forms.non_form_errors()))
+
+    def test_payment_rows_keep_reordered_positions_after_save(self):
+        payment = self.create_payment("100.00")
+        first = PaymentOutItem.objects.create(
+            payment=payment, invoice=self.invoice, amount="40", sort_order=0,
+        )
+        second = PaymentOutItem.objects.create(
+            payment=payment, invoice=self.invoice, amount="60", sort_order=1,
+        )
+        forms = self.formset(payment, [
+            {"id": first.pk, "invoice": self.invoice.pk, "amount": "40", "sort_order": "1"},
+            {"id": second.pk, "invoice": self.invoice.pk, "amount": "60", "sort_order": "0"},
+        ])
+        self.assertTrue(forms.is_valid(), forms.errors)
+        forms.save()
+        self.assertEqual(
+            list(payment.paymentoutitem_set.values_list("pk", flat=True)),
+            [second.pk, first.pk],
+        )
+        self.assertEqual(
+            sum(payment.paymentoutitem_set.values_list("amount", flat=True)),
+            Decimal("100"),
+        )
 
     def test_invoice_options_include_filter_metadata(self):
         html = str(PaymentOutItemInlineForm()["invoice"])
