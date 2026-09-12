@@ -22,6 +22,8 @@ from catalogs.models import ContractorBankAccount, OurBankAccount
 
 from .models import (
     CustomerOrder,
+    GoodsReceipt,
+    GoodsReceiptItem,
     InvoiceItem,
     OrderItem,
     PaymentOrderOut,
@@ -35,6 +37,9 @@ from .models import (
     SupplierPriceItem,
     SupplierPriceList,
 )
+
+from .receipts import receipt_order_items
+
 
 BASE_READONLY_DATES = ("created", "updated")
 BASE_READONLY = ("id",) + BASE_READONLY_DATES
@@ -280,6 +285,8 @@ class PurchaseOrderItemInline(TabularInline):
         "purchase_price",
         "rrp",
         "quantity",
+        "received_quantity",
+        "remaining_quantity",
         "purchase_total_price",
         "organization",
         "customer_order",
@@ -287,7 +294,28 @@ class PurchaseOrderItemInline(TabularInline):
         "get_invoice_link",
     )
     ordering = ("sort_order_purchase",)
-    readonly_fields = ("purchase_total_price", "get_invoice_link")
+    readonly_fields = ("purchase_total_price", "get_invoice_link", "received_quantity", "remaining_quantity")
+
+    def get_queryset(self, request):
+        received = GoodsReceiptItem.objects.filter(
+            order_item_id=OuterRef("pk"), receipt__is_applied=True,
+        ).order_by().values("order_item_id").annotate(total=Sum("quantity"))
+        return super().get_queryset(request).annotate(
+            calculated_received=Coalesce(
+                Subquery(received.values("total")[:1]), Value(Decimal("0")),
+                output_field=DecimalField(max_digits=14, decimal_places=6),
+            ),
+        )
+
+    @admin.display(description=_("Получено"))
+    def received_quantity(self, obj):
+        return getattr(obj, "calculated_received", Decimal("0")) if obj and obj.pk else "—"
+
+    @admin.display(description=_("Осталось получить"))
+    def remaining_quantity(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        return obj.quantity - getattr(obj, "calculated_received", Decimal("0"))
 
     @admin.display(description=_("Счет"))
     def get_invoice_link(self, obj):
@@ -856,6 +884,11 @@ class RetailPriceListAdmin(BaseDocumentAdmin):
 
 
 class PurchaseOrderForm(DocumentForm):
+    def clean(self):
+        data = super().clean()
+        self.instance._force_current_date = bool(data.get("force_current_date"))
+        return data
+
     class Meta:
         model = PurchaseOrder
         fields = "__all__"
@@ -1369,3 +1402,155 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
         if difference < 0:
             return _("Недоплата: %(amount)s грн") % {"amount": formatted_difference}
         return _("Без расхождений")
+
+
+class GoodsReceiptForm(DocumentForm):
+    fill_from_order = forms.BooleanField(
+        label=_("Заполнить остатком по заказу"), required=False,
+        help_text=_("Добавит отсутствующие строки с неполученным количеством при сохранении. Уже введённые строки сохранятся."),
+    )
+
+    class Meta:
+        model = GoodsReceipt
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["purchase_order"].queryset = PurchaseOrder.objects.filter(
+            is_applied=True, to_remove=False,
+        )
+
+
+class GoodsReceiptItemForm(forms.ModelForm):
+    class Meta:
+        model = GoodsReceiptItem
+        fields = "__all__"
+        labels = {"sort_order": "⇅"}
+
+    def __init__(self, *args, receipt_context=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if receipt_context is not None:
+            self.fields["order_item"].queryset = receipt_order_items(receipt_context).filter(
+                Q(remaining_quantity__gt=0) | Q(pk=self.instance.order_item_id)
+            )
+            self.fields["order_item"].label_from_instance = lambda item: (
+                f"{item.product} — осталось {item.remaining_quantity.normalize():f} {item.product.unit.symbol}"
+            )
+        if self.instance.pk:
+            self.fields["order_item"].disabled = True
+        self.fields["quantity"].widget.attrs["step"] = "0.000001"
+
+
+class GoodsReceiptItemFormSet(BaseInlineFormSet):
+    def get_form_kwargs(self, index):
+        kwargs = super().get_form_kwargs(index)
+        context = GoodsReceipt(pk=self.instance.pk, organization_id=None)
+        for field in ("purchase_order", "organization"):
+            value = self.data.get(field) if self.is_bound else getattr(self.instance, f"{field}_id")
+            try:
+                value = int(value) if value else None
+            except (TypeError, ValueError):
+                value = None
+            setattr(context, f"{field}_id", value)
+        kwargs["receipt_context"] = context
+        return kwargs
+
+    def clean(self):
+        super().clean()
+        self.pending_items = []
+        if any(self.errors) or not self.instance.purchase_order_id or not self.instance.organization_id:
+            return
+        # Admin validates and saves the entire document inside a transaction.
+        # Lock source rows before reading balances so concurrent receipts serialize.
+        list(OrderItem.objects.select_for_update().filter(
+            purchase_order_id=self.instance.purchase_order_id,
+        ).order_by("pk").values_list("pk", flat=True))
+        available = {item.pk: item for item in receipt_order_items(self.instance)}
+        used = set()
+        for form in self.forms:
+            data = form.cleaned_data
+            if not data or not data.get("order_item"):
+                continue
+            item_id = data["order_item"].pk
+            used.add(item_id)  # Deleted rows must not be added back by autofill.
+            if data.get("DELETE"):
+                continue
+            item = available.get(item_id)
+            if item is None:
+                form.add_error("order_item", _("Строка не соответствует заказу и организации поступления."))
+            elif data["quantity"] > item.remaining_quantity:
+                form.add_error("quantity", _("Доступно к поступлению: %(quantity)s.") % {"quantity": item.remaining_quantity})
+        if any(self.errors):
+            return
+        if self.data.get("fill_from_order"):
+            for item in available.values():
+                if item.pk in used or item.remaining_quantity <= 0:
+                    continue
+                row = GoodsReceiptItem(
+                    receipt=self.instance, order_item=item,
+                    quantity=item.remaining_quantity,
+                    sort_order=item.sort_order_purchase,
+                )
+                try:
+                    row.full_clean(exclude=("receipt",))
+                except forms.ValidationError as error:
+                    raise forms.ValidationError(
+                        _("Не удалось заполнить товар %(product)s: %(error)s"),
+                        params={"product": item.product, "error": "; ".join(error.messages)},
+                    ) from error
+                self.pending_items.append(row)
+        active = [f for f in self.forms if f.cleaned_data and not f.cleaned_data.get("DELETE")]
+        if self.instance.is_applied and not active and not self.pending_items:
+            raise forms.ValidationError(_("Нельзя провести поступление без позиций."))
+
+    def save_new_objects(self, commit=True):
+        objects = super().save_new_objects(commit=commit)
+        for item in self.pending_items:
+            item.receipt = self.instance
+            if commit:
+                item.save()
+            objects.append(item)
+        return objects
+
+
+class GoodsReceiptItemInline(TabularInline):
+    model = GoodsReceiptItem
+    form = GoodsReceiptItemForm
+    formset = GoodsReceiptItemFormSet
+    fields = ("sort_order", "order_item", "quantity", "line_total")
+    readonly_fields = ("line_total",)
+    extra = 0
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("order_item")
+
+    @admin.display(description=_("Сумма по цене заказа"))
+    def line_total(self, obj):
+        return obj.total_price if obj and obj.pk else "—"
+
+
+
+@admin.register(GoodsReceipt)
+class GoodsReceiptAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
+    form = GoodsReceiptForm
+    total_field = F("items__quantity") * F("items__order_item__purchase_price")
+    product_field = "items__order_item__product"
+    list_display = ("id", "purchase_order", "supplier", "organization", "warehouse", "order_total", "is_applied", "created")
+    list_display_links = ("id", "purchase_order")
+    list_filter = ("is_applied", "organization", "warehouse", "purchase_order__supplier")
+    fields = BASE_FIELDS + (
+        "purchase_order", "supplier", "warehouse", "fill_from_order",
+        ("order_total", "order_quantity", "product_count"), "comment",
+    )
+    readonly_fields = BASE_READONLY + ("supplier", "order_total", "order_quantity", "product_count")
+    inlines = (GoodsReceiptItemInline,)
+
+    @admin.display(description=_("Поставщик"))
+    def supplier(self, obj):
+        return obj.purchase_order.supplier if obj and obj.purchase_order_id else "—"
+
+    class Media:
+        js = [
+            "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
+            "documents/js/admin_sortable_init.js",
+        ]

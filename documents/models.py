@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models import F, GeneratedField
 from django.utils import timezone
@@ -255,7 +256,24 @@ class PurchaseOrder(BaseDocumentModel):
         help_text=_("Если не выбран, используется тип цены по умолчанию у поставщика"),
     )
 
+    def validate_receipt_lock(self):
+        if not self.pk or not GoodsReceiptItem.objects.filter(
+            order_item__purchase_order_id=self.pk, receipt__is_applied=True,
+        ).exists():
+            return
+        previous = type(self).objects.get(pk=self.pk)
+        fields = ("is_applied", "dt_applied", "supplier_id", "organization_id", "to_remove", "price_type")
+        if getattr(self, "_force_current_date", False) or any(
+            getattr(self, field) != getattr(previous, field) for field in fields
+        ):
+            raise ValidationError(_("Сначала снимите проведение связанных поступлений: изменение реквизитов и перепроведение заказа заблокированы."))
+
+    def clean(self):
+        super().clean()
+        self.validate_receipt_lock()
+
     def save(self, *args, **kwargs):
+        self.validate_receipt_lock()
         if not self.price_type and self.supplier_id:
             self.price_type = self.supplier.default_price_type
         super().save(*args, **kwargs)
@@ -438,6 +456,18 @@ class OrderItem(models.Model):
     def __str__(self):
         return f"{self.product.name} ({self.quantity})"
 
+    def validate_receipt_lock(self):
+        if not self.pk or not self.receipt_items.filter(receipt__is_applied=True).exists():
+            return
+        previous = type(self).objects.get(pk=self.pk)
+        fields = ("purchase_price", "product_id", "quantity", "organization_id", "purchase_order_id", "warehouse_id")
+        if any(getattr(self, field) != getattr(previous, field) for field in fields):
+            raise ValidationError(_("Строка заказа связана с проведённым поступлением. Сначала снимите проведение поступления."))
+
+    def clean(self):
+        super().clean()
+        self.validate_receipt_lock()
+
     def save(self, *args, **kwargs):
         print("SAVE OrderItem")
         # Если организация в строке не указана, пытаемся взять ее из заказа
@@ -448,6 +478,7 @@ class OrderItem(models.Model):
             if parent_order and parent_order.organization:
                 self.organization = parent_order.organization
 
+        self.validate_receipt_lock()
         super().save(*args, **kwargs)
 
     # def delete(self, *args, **kwargs):
@@ -861,3 +892,83 @@ class PaymentOutItem(models.Model):
         verbose_name = _("Оплата счета")
         verbose_name_plural = _("Оплата счетов")
         ordering = ("sort_order", "pk")
+
+
+class GoodsReceipt(BaseDocumentModel):
+    purchase_order = models.ForeignKey(
+        PurchaseOrder, on_delete=models.PROTECT, related_name="goods_receipts",
+        verbose_name=_("Заказ поставщику"),
+    )
+    warehouse = models.ForeignKey(
+        "catalogs.Warehouse", on_delete=models.PROTECT,
+        verbose_name=_("Склад приёмки"),
+    )
+    comment = models.TextField(_("Комментарий"), blank=True)
+
+    def clean(self):
+        super().clean()
+        if not self.purchase_order_id:
+            return
+        order = self.purchase_order
+        if not order.is_applied or order.to_remove:
+            raise ValidationError({"purchase_order": _("Выберите проведённый заказ поставщику без пометки на удаление.")})
+        if order.organization_id and self.organization_id != order.organization_id:
+            raise ValidationError({"organization": _("Организация поступления должна совпадать с организацией заказа.")})
+        if self.is_applied and self.to_remove:
+            raise ValidationError({"to_remove": _("Проведённое поступление нельзя пометить на удаление.")})
+
+    class Meta(BaseDocumentModel.Meta):
+        verbose_name = _("Поступление товаров")
+        verbose_name_plural = _("Поступления товаров")
+
+
+class GoodsReceiptItem(models.Model):
+    receipt = models.ForeignKey(
+        GoodsReceipt, on_delete=models.CASCADE, related_name="items",
+    )
+    order_item = models.ForeignKey(
+        OrderItem, on_delete=models.PROTECT, related_name="receipt_items",
+        verbose_name=_("Строка заказа поставщику"),
+    )
+    quantity = models.DecimalField(
+        _("Получено"), max_digits=14, decimal_places=6,
+        validators=[MinValueValidator(Decimal("0.000001"))],
+    )
+    @property
+    def total_price(self):
+        price = self.order_item.purchase_price
+        if price is None or self.quantity is None:
+            return None
+        return (self.quantity * price).quantize(Decimal("0.01"))
+
+    sort_order = models.PositiveIntegerField(
+        _("Порядок"), default=0, blank=True, null=True, db_index=True,
+    )
+
+    def clean(self):
+        super().clean()
+        if not self.order_item_id:
+            return
+        item = self.order_item
+        if self.quantity is not None:
+            places = max(0, -self.quantity.normalize().as_tuple().exponent)
+            if places > item.product.unit.decimal_places:
+                raise ValidationError({"quantity": _("Количество не соответствует точности единицы измерения товара.")})
+        if self.receipt_id or "receipt" in self._state.fields_cache:
+            receipt = self.receipt
+            if item.purchase_order_id != receipt.purchase_order_id:
+                raise ValidationError({"order_item": _("Строка не принадлежит выбранному заказу поставщику.")})
+            organization_id = item.organization_id or (
+                item.purchase_order.organization_id if item.purchase_order_id else None
+            )
+            if organization_id != receipt.organization_id:
+                raise ValidationError({"order_item": _("Организация строки заказа не совпадает с поступлением.")})
+
+    class Meta:
+        verbose_name = _("Позиция поступления")
+        verbose_name_plural = _("Позиции поступления")
+        ordering = ("sort_order", "pk")
+        constraints = [
+            models.UniqueConstraint(fields=("receipt", "order_item"), name="unique_receipt_order_item"),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name="receipt_quantity_positive"),
+        ]
