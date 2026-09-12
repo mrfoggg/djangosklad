@@ -40,6 +40,7 @@ from .models import (
 
 from .receipts import receipt_order_items
 from .invoices import invoice_order_items, with_invoice_balance
+from .order_lines import with_order_position
 
 
 BASE_READONLY_DATES = ("created", "updated")
@@ -376,7 +377,7 @@ class OrderLineUnitSelectWidget(UnfoldAdminSelectWidget):
 
 def configure_order_line_quantity(form):
     field = form.fields["order_item"]
-    field.queryset = field.queryset.select_related("product__unit", "purchase_order")
+    field.queryset = with_order_position(field.queryset).select_related("product__unit", "purchase_order")
     item = None
     if form.instance.order_item_id:
         item = field.queryset.filter(pk=form.instance.order_item_id).first()
@@ -431,7 +432,7 @@ class PurchaseInvoiceItemInlineForm(forms.ModelForm):
     def label_for_purchase(self, obj):
         number = obj.purchase_order_id or "—"
         remaining = getattr(obj, "invoice_remaining", obj.quantity)
-        return f"Заказ №{number} | {obj.product.name} | Осталось {remaining:f} {obj.product.unit.symbol}"
+        return f"Заказ №{number} | Строка №{obj.order_position_number} | {obj.product.name} | Осталось {remaining:f} {obj.product.unit.symbol}"
 
 
 class InvoiceItemFormSet(BaseInlineFormSet):
@@ -1448,12 +1449,18 @@ class GoodsReceiptItemForm(forms.ModelForm):
             self.fields["order_item"].queryset = receipt_order_items(receipt_context).filter(
                 Q(remaining_quantity__gt=0) | Q(pk=self.instance.order_item_id)
             )
-            self.fields["order_item"].label_from_instance = lambda item: (
-                f"{item.product} — осталось {item.remaining_quantity.normalize():f} {item.product.unit.symbol}"
-            )
+        self.fields["order_item"].label_from_instance = self.label_for_order_line
         if self.instance.pk:
             self.fields["order_item"].disabled = True
         configure_order_line_quantity(self)
+
+    @staticmethod
+    def label_for_order_line(item):
+        remaining = getattr(item, "remaining_quantity", item.quantity)
+        return (
+            f"Заказ №{item.purchase_order_id} | Строка №{item.order_position_number} | "
+            f"{item.product} — осталось {remaining.normalize():f} {item.product.unit.symbol}"
+        )
 
 
 class GoodsReceiptItemFormSet(BaseInlineFormSet):

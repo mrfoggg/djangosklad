@@ -174,3 +174,39 @@ class PartialInvoiceTests(TestCase):
                 instance = model(pk=999, order_item_id=self.item.pk, quantity=Decimal("1.25"))
                 form = form_class(instance=instance)
                 self.assertEqual(Decimal(form.initial["quantity"]), Decimal("1.25"))
+
+    def test_choice_labels_keep_order_positions_when_prior_line_is_unavailable(self):
+        from documents.admin import GoodsReceiptItemForm, PurchaseInvoiceItemInlineForm
+        from documents.models import GoodsReceipt, GoodsReceiptItem
+
+        second = OrderItem.objects.create(
+            purchase_order=self.order, organization=self.organization, warehouse=self.warehouse,
+            product=self.product, quantity=2, purchase_price=100, sort_order_purchase=10,
+        )
+        third = OrderItem.objects.create(
+            purchase_order=self.order, organization=self.organization, warehouse=self.warehouse,
+            product=self.product, quantity=3, purchase_price=100, sort_order_purchase=10,
+        )
+        self.assert_saved(self.post_invoice(10, applied=True))
+        receipt = GoodsReceipt.objects.create(
+            purchase_order=self.order, organization=self.organization, warehouse=self.warehouse, is_applied=True,
+        )
+        GoodsReceiptItem.objects.create(receipt=receipt, order_item=self.item, quantity=10)
+        invoice_context = PurchaseInvoice(supplier=self.supplier, organization=self.organization)
+        receipt_context = GoodsReceipt(purchase_order=self.order, organization=self.organization)
+        forms = (
+            PurchaseInvoiceItemInlineForm(invoice_context=invoice_context, order_ids=[self.order.pk]),
+            GoodsReceiptItemForm(receipt_context=receipt_context),
+        )
+        for form in forms:
+            with self.subTest(form=type(form).__name__):
+                field = form.fields["order_item"]
+                self.assertFalse(field.queryset.filter(pk=self.item.pk).exists())
+                for item, number in ((second, 2), (third, 3)):
+                    label = field.label_from_instance(field.queryset.get(pk=item.pk))
+                    self.assertIn(f"Заказ №{self.order.pk} | Строка №{number}", label)
+        third.sort_order_purchase = 1
+        third.save()
+        field = forms[0].fields["order_item"]
+        self.assertIn("Строка №2", field.label_from_instance(field.queryset.get(pk=third.pk)))
+        self.assertIn("Строка №3", field.label_from_instance(field.queryset.get(pk=second.pk)))
