@@ -143,3 +143,34 @@ class PartialInvoiceTests(TestCase):
         links = str(PurchaseOrderItemInline(PurchaseOrder, admin.site).get_invoice_link(self.item))
         for invoice in PurchaseInvoice.objects.all():
             self.assertIn(reverse("admin:documents_purchaseinvoice_change", args=[invoice.pk]), links)
+
+    def test_units_control_quantity_widgets_in_invoices_and_receipts(self):
+        from catalogs.models import MeasurementUnit
+        from documents.admin import GoodsReceiptItemForm, PurchaseInvoiceItemInlineForm
+        from documents.models import GoodsReceiptItem
+
+        for places, quantity, expected in ((0, "2.000000", "2"), (3, "1.250000", "1.250")):
+            unit = MeasurementUnit.objects.create(
+                code=f"test-unit-{places}", name="Единица", symbol=f"ед{places}", decimal_places=places,
+            )
+            self.product.unit = unit
+            self.product.save()
+            for model, form_class in ((InvoiceItem, PurchaseInvoiceItemInlineForm), (GoodsReceiptItem, GoodsReceiptItemForm)):
+                with self.subTest(places=places, model=model.__name__):
+                    instance = model(pk=999, order_item_id=self.item.pk, quantity=Decimal(quantity))
+                    form = form_class(instance=instance)
+                    self.assertEqual(form.fields["quantity"].widget.attrs["step"], "1" if places == 0 else "0.001")
+                    self.assertEqual(form.initial["quantity"], expected)
+                    html = str(form["order_item"])
+                    self.assertIn(f'data-quantity-decimal-places="{places}"', html)
+                    self.assertIn(f'data-unit-symbol="ед{places}"', html)
+
+    def test_invalid_quantity_is_not_rounded_in_forms(self):
+        from documents.admin import GoodsReceiptItemForm, PurchaseInvoiceItemInlineForm
+        from documents.models import GoodsReceiptItem
+
+        for model, form_class in ((InvoiceItem, PurchaseInvoiceItemInlineForm), (GoodsReceiptItem, GoodsReceiptItemForm)):
+            with self.subTest(model=model.__name__):
+                instance = model(pk=999, order_item_id=self.item.pk, quantity=Decimal("1.25"))
+                form = form_class(instance=instance)
+                self.assertEqual(Decimal(form.initial["quantity"]), Decimal("1.25"))

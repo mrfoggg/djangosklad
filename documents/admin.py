@@ -352,10 +352,40 @@ class CustomeOrderItemInline(TabularInline):
     readonly_fields = ("customer_total_price",)
 
 
+class OrderLineUnitSelectWidget(UnfoldAdminSelectWidget):
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(
+            name, value, label, selected, index, subindex=subindex, attrs=attrs,
+        )
+        item = getattr(value, "instance", None)
+        if item is not None:
+            unit = item.product.unit
+            option["attrs"]["data-quantity-decimal-places"] = unit.decimal_places
+            option["attrs"]["data-unit-symbol"] = unit.symbol
+        return option
+
+
+def configure_order_line_quantity(form):
+    field = form.fields["order_item"]
+    field.queryset = field.queryset.select_related("product__unit", "purchase_order")
+    item = None
+    if form.instance.order_item_id:
+        item = field.queryset.filter(pk=form.instance.order_item_id).first()
+    places = item.product.unit.decimal_places if item else 0
+    form.fields["quantity"].widget.attrs["step"] = f"{Decimal(1).scaleb(-places):f}"
+    quantity = form.instance.quantity
+    if not form.is_bound and form.instance.pk and quantity is not None:
+        # Never round away precision errors in existing data.
+        rounded = quantity.quantize(Decimal(1).scaleb(-places))
+        if rounded == quantity:
+            form.initial["quantity"] = f"{quantity:.{places}f}"
+
+
 class PurchaseInvoiceItemInlineForm(forms.ModelForm):
     class Meta:
         model = InvoiceItem
         fields = "__all__"
+        widgets = {"order_item": OrderLineUnitSelectWidget()}
 
     def __init__(self, *args, invoice_context=None, order_ids=(), **kwargs):
         super().__init__(*args, **kwargs)
@@ -376,7 +406,7 @@ class PurchaseInvoiceItemInlineForm(forms.ModelForm):
             if self.instance.pk:
                 field.disabled = True
         self.fields["quantity"].help_text = _("Пустое поле — оставшееся количество по заказу.")
-        self.fields["quantity"].widget.attrs["step"] = "0.000001"
+        configure_order_line_quantity(self)
 
     def clean(self):
         data = super().clean()
@@ -1121,6 +1151,7 @@ class PurchaseInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
         js = [
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_sortable_init.js",
+            "documents/js/admin_quantity_step.js",
         ]
 
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
@@ -1400,6 +1431,7 @@ class GoodsReceiptItemForm(forms.ModelForm):
         model = GoodsReceiptItem
         fields = "__all__"
         labels = {"sort_order": "⇅"}
+        widgets = {"order_item": OrderLineUnitSelectWidget()}
 
     def __init__(self, *args, receipt_context=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1412,7 +1444,7 @@ class GoodsReceiptItemForm(forms.ModelForm):
             )
         if self.instance.pk:
             self.fields["order_item"].disabled = True
-        self.fields["quantity"].widget.attrs["step"] = "0.000001"
+        configure_order_line_quantity(self)
 
 
 class GoodsReceiptItemFormSet(BaseInlineFormSet):
@@ -1527,4 +1559,5 @@ class GoodsReceiptAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
         js = [
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_sortable_init.js",
+            "documents/js/admin_quantity_step.js",
         ]
