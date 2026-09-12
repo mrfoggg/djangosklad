@@ -371,6 +371,7 @@ class PaymentAllocationValidationTests(PaymentOutItemTests):
             "amount": "50.00",
             "bank_commission": "0",
             "category": PaymentOrderOut.Category.GOODS,
+            "payment_number": "000123/Б",
             "paymentoutitem_set-TOTAL_FORMS": "1",
             "paymentoutitem_set-INITIAL_FORMS": "0",
             "paymentoutitem_set-0-invoice": self.invoice.pk,
@@ -383,9 +384,16 @@ class PaymentAllocationValidationTests(PaymentOutItemTests):
         self.assertContains(response, "больше суммы платежа")
         self.assertFalse(PaymentOrderOut.objects.exists())
         data["amount"] = "100.00"
+        data["payment_number"] = ""
+        response = self.client.post(url, data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("payment_number", response.context["adminform"].form.errors)
+        self.assertFalse(PaymentOrderOut.objects.exists())
+        data["payment_number"] = "000123/Б"
         response = self.client.post(url, data)
         self.assertEqual(response.status_code, 302)
         self.assertEqual(PaymentOutItem.objects.get().amount, Decimal("100"))
+        self.assertEqual(PaymentOrderOut.objects.get().payment_number, "000123/Б")
 
     def test_reducing_payment_below_unchanged_rows_is_rejected(self):
         payment = self.create_payment("100.00")

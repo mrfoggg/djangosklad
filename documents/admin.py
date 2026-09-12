@@ -1275,6 +1275,7 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
     form = PaymentOrderOutForm
     list_display = (
         "id",
+        "payment_number",
         "contractor",
         "organization",
         "category",
@@ -1287,9 +1288,12 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
     )
     list_display_links = ("id", "contractor")
     list_filter = ("category", "is_applied")
+    search_fields = ("payment_number", "verification_code", "uetr")
     # fields = BASE_FIELDS + ("supplier", "bank_account", "total_debited")
     # Объединяем кортежи, чтобы не потерять системные поля из BaseDocumentAdmin
     fields = BASE_FIELDS[:-1] + (
+        "payment_number",
+        ("verification_code", "uetr"),
         "category",
         ("organization", "our_bank_account"),
         (

@@ -694,6 +694,14 @@ class PaymentOrderOut(BaseBankPayment):
         SERVICES = "services", _("За услуги")
         CUSTOMER_REFUND = "customer_refund", _("Возврат покупателю")
 
+    payment_number = models.CharField(
+        _("Номер платёжного документа"), max_length=100
+    )
+    verification_code = models.CharField(
+        _("Код проверки"), max_length=255, blank=True
+    )
+    uetr = models.UUIDField(_("UETR СЕП"), blank=True, null=True)
+
     category = models.CharField(
         _("Категория платежа"),
         max_length=20,
