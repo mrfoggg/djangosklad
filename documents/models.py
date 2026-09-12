@@ -561,12 +561,39 @@ class InvoiceItem(models.Model):
     invoice = models.ForeignKey(
         "PurchaseInvoice", on_delete=models.CASCADE, related_name="items"
     )
-    order_item = models.OneToOneField(
+    order_item = models.ForeignKey(
         "OrderItem",
         on_delete=models.PROTECT,  # Рекомендую PROTECT, чтобы случайно не "снести" строку в проведенном счете
-        related_name="invoice_item",
+        related_name="invoice_items",
         verbose_name=_("Строка заказа"),
     )
+    quantity = models.DecimalField(
+        _("Количество по счёту"), max_digits=14, decimal_places=6, blank=True,
+        validators=[MinValueValidator(Decimal("0.000001"))],
+    )
+
+    @property
+    def total_price(self):
+        price = self.order_item.purchase_price
+        if price is None or self.quantity is None:
+            return None
+        return (self.quantity * price).quantize(Decimal("0.01"))
+
+    def save(self, *args, **kwargs):
+        if self.quantity is None and self.order_item_id:
+            from .invoices import with_invoice_balance
+            self.quantity = with_invoice_balance(
+                OrderItem.objects.filter(pk=self.order_item_id), self.invoice_id,
+            ).get().invoice_remaining
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        if self.order_item_id and self.quantity is not None:
+            places = max(0, -self.quantity.normalize().as_tuple().exponent)
+            if places > self.order_item.product.unit.decimal_places:
+                raise ValidationError({"quantity": _("Количество не соответствует точности единицы измерения товара.")})
+
     sort_order = models.PositiveIntegerField(
         default=0, blank=True, null=True, verbose_name=_("Порядок"), db_index=True
     )
@@ -575,6 +602,10 @@ class InvoiceItem(models.Model):
         verbose_name = _("Позиция входящего счета")
         verbose_name_plural = _("Позиции входящего счета")
         ordering = ["sort_order"]
+        constraints = [
+            models.UniqueConstraint(fields=("invoice", "order_item"), name="unique_invoice_order_item"),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name="invoice_quantity_positive"),
+        ]
 
     def __str__(self):
         return f"{self.invoice.id} [# {self.sort_order}] <- {self.order_item}"
@@ -873,7 +904,7 @@ class PaymentOutItem(models.Model):
     def save(self, *args, resolve_amount=True, **kwargs):
         if resolve_amount and (self.amount is None or self.amount == 0) and self.invoice_id:
             invoice_total = self.invoice.items.aggregate(
-                total=models.Sum("order_item__purchase_total_price")
+                total=models.Sum(F("quantity") * F("order_item__purchase_price"))
             )["total"] or Decimal("0.00")
             paid_total = (
                 PaymentOutItem.objects.filter(

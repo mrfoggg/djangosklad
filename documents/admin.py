@@ -7,7 +7,7 @@ from django.db.models.functions import Coalesce
 from django.forms.models import BaseInlineFormSet
 from django.urls import reverse
 from django.utils.formats import number_format
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
 from unfold.admin import ModelAdmin, TabularInline
@@ -39,6 +39,7 @@ from .models import (
 )
 
 from .receipts import receipt_order_items
+from .invoices import invoice_order_items, with_invoice_balance
 
 
 BASE_READONLY_DATES = ("created", "updated")
@@ -317,19 +318,15 @@ class PurchaseOrderItemInline(TabularInline):
             return "—"
         return obj.quantity - getattr(obj, "calculated_received", Decimal("0"))
 
-    @admin.display(description=_("Счет"))
+    @admin.display(description=_("Счета"))
     def get_invoice_link(self, obj):
-        # Проверяем, есть ли обратная связь от InvoiceItem
-        if hasattr(obj, "invoice_item") and obj.invoice_item:
-            invoice = obj.invoice_item.invoice
-            url = reverse("admin:documents_purchaseinvoice_change", args=[invoice.id])
-
-            return format_html(
-                '<a href="{}" target="_blank" style="font-weight: 600; color: #10b981; text-decoration: underline;">Счет №{}</a>',
-                url,
-                invoice.id,
-            )
-        return "-"
+        if not obj or not obj.pk:
+            return "—"
+        return format_html_join(
+            ", ", '<a href="{}">Счёт №{}</a>',
+            ((reverse("admin:documents_purchaseinvoice_change", args=[item.invoice_id]), item.invoice_id)
+             for item in obj.invoice_items.all()),
+        ) or "—"
 
 
 # для заказа покупателю
@@ -360,36 +357,119 @@ class PurchaseInvoiceItemInlineForm(forms.ModelForm):
         model = InvoiceItem
         fields = "__all__"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, invoice_context=None, order_ids=(), **kwargs):
         super().__init__(*args, **kwargs)
-        if "order_item" in self.fields:
-            # Переопределяем отображение каждой строки в выпадающем списке
-            order_item_field = self.fields["order_item"]
-            order_item_field.label_from_instance = self.label_for_purchase
-            # После первого сохранения связь позиции счета со строкой заказа
-            # фиксируется и больше не может быть подменена через админку.
-            if self.instance and self.instance.pk:
-                order_item_field.disabled = True
-            else:
-                # В новой позиции не предлагаем строки заказов, которые уже
-                # добавлены в любой входящий счет.
-                order_item_field.queryset = order_item_field.queryset.filter(
-                    invoice_item__isnull=True
+        field = self.fields.get("order_item")
+        if field:
+            field.label_from_instance = self.label_for_purchase
+            if invoice_context is not None:
+                available = invoice_order_items(invoice_context, order_ids)
+                # Existing links stay visible; the formset validates their context.
+                field.queryset = with_invoice_balance(
+                    OrderItem.objects.filter(
+                        Q(pk__in=available.filter(invoice_remaining__gt=0).values("pk"))
+                        | Q(pk=self.instance.order_item_id)
+                    ).select_related("product__unit", "purchase_order"), invoice_context.pk,
                 )
+            elif not self.instance.pk:
+                field.queryset = with_invoice_balance(field.queryset).filter(invoice_remaining__gt=0)
+            if self.instance.pk:
+                field.disabled = True
+        self.fields["quantity"].help_text = _("Пустое поле — оставшееся количество по заказу.")
+        self.fields["quantity"].widget.attrs["step"] = "0.000001"
+
+    def clean(self):
+        data = super().clean()
+        item = data.get("order_item")
+        if item and data.get("quantity") is None and "quantity" not in self.errors:
+            data["quantity"] = with_invoice_balance(
+                OrderItem.objects.filter(pk=item.pk), self.instance.invoice_id,
+            ).get().invoice_remaining
+            if data["quantity"] <= 0:
+                self.add_error("quantity", _("По строке заказа не осталось количества для счёта."))
+        return data
 
     def label_for_purchase(self, obj):
-        # Формируем строку: Заказ №X | Товар | Кол-во
-        order_no = obj.purchase_order.id if obj.purchase_order else "???"
-        order_dt = obj.purchase_order.dt_applied if obj.purchase_order else "???"
-        return (
-            f"№{order_no} от {order_dt} | {obj.product.name} "
-            f"({obj.quantity} {obj.product.unit.symbol})"
-        )
+        number = obj.purchase_order_id or "—"
+        remaining = getattr(obj, "invoice_remaining", obj.quantity)
+        return f"Заказ №{number} | {obj.product.name} | Осталось {remaining:f} {obj.product.unit.symbol}"
+
+
+class InvoiceItemFormSet(BaseInlineFormSet):
+    def get_form_kwargs(self, index):
+        kwargs = super().get_form_kwargs(index)
+        context = PurchaseInvoice(pk=self.instance.pk, organization_id=None)
+        for field in ("supplier", "organization"):
+            value = self.data.get(field) if self.is_bound else getattr(self.instance, f"{field}_id")
+            try:
+                value = int(value) if value else None
+            except (ValueError, TypeError):
+                value = None
+            setattr(context, f"{field}_id", value)
+        # Ignore invalid suppliers here: the parent form reports the error.
+        if context.supplier_id and not context._meta.get_field("supplier").remote_field.model.objects.filter(pk=context.supplier_id).exists():
+            context.supplier_id = None
+        kwargs.update(invoice_context=context, order_ids=self.selected_order_ids())
+        return kwargs
+
+    def selected_order_ids(self):
+        if self.is_bound:
+            return [int(value) for value in self.data.getlist("orders") if value.isdigit()]
+        return list(self.instance.orders.values_list("pk", flat=True)) if self.instance.pk else []
+
+    def clean(self):
+        super().clean()
+        self.pending_items = []
+        if any(self.errors) or not self.instance.supplier_id or not self.instance.organization_id:
+            return
+        ids = self.selected_order_ids()
+        list(OrderItem.objects.select_for_update().filter(purchase_order_id__in=ids).order_by("pk").values_list("pk", flat=True))
+        available = {item.pk: item for item in invoice_order_items(self.instance, ids)}
+        used = set()
+        for form in self.forms:
+            data = form.cleaned_data
+            if not data or not data.get("order_item"):
+                continue
+            pk = data["order_item"].pk
+            used.add(pk)
+            if data.get("DELETE"):
+                continue
+            item = available.get(pk)
+            if item is None:
+                form.add_error("order_item", _("Строка не соответствует выбранным заказам, поставщику или организации счёта."))
+            elif data["quantity"] > item.invoice_remaining:
+                form.add_error("quantity", _("Доступно для счёта: %(quantity)s.") % {"quantity": item.invoice_remaining})
+        if any(self.errors):
+            return
+        if self.data.get("fill_from_orders"):
+            for item in available.values():
+                if item.pk in used or item.invoice_remaining <= 0:
+                    continue
+                row = InvoiceItem(invoice=self.instance, order_item=item,
+                                  quantity=item.invoice_remaining, sort_order=item.sort_order_purchase)
+                try:
+                    row.full_clean(exclude=("invoice",))
+                except forms.ValidationError as error:
+                    raise forms.ValidationError(
+                        _("Не удалось заполнить товар %(product)s: %(error)s"),
+                        params={"product": item.product, "error": "; ".join(error.messages)},
+                    ) from error
+                self.pending_items.append(row)
+
+    def save_new_objects(self, commit=True):
+        objects = super().save_new_objects(commit=commit)
+        for item in self.pending_items:
+            item.invoice = self.instance
+            if commit:
+                item.save()
+            objects.append(item)
+        return objects
 
 
 class InvoiceItemInline(TabularInline):
     model = InvoiceItem
     form = PurchaseInvoiceItemInlineForm
+    formset = InvoiceItemFormSet
     extra = 0
     tab = True
 
@@ -400,40 +480,8 @@ class InvoiceItemInline(TabularInline):
         return formset
 
     # Добавляем get_order_link в список полей
-    fields = ("sort_order", "get_order_link", "order_item", "get_price", "get_total")
+    fields = ("sort_order", "get_order_link", "order_item", "quantity", "get_price", "get_total")
     readonly_fields = ("get_order_link", "get_price", "get_total")
-
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        if db_field.name == "order_item":
-            object_id = request.resolver_match.kwargs.get("object_id")
-            if object_id:
-                invoice = PurchaseInvoice.objects.filter(pk=object_id).first()
-                if invoice:
-                    # 1. Берем ID всех заказов, выбранных в "основаниях"
-                    selected_order_ids = invoice.orders.values_list("id", flat=True)
-
-                    # Ограничения по заказам-основаниям и организации нужны
-                    # только для выбора новой позиции счета.
-                    new_item_filters = Q(
-                        purchase_order_id__in=selected_order_ids,
-                        invoice_item__isnull=True,
-                    )
-                    if invoice.organization:
-                        new_item_filters &= Q(organization=invoice.organization)
-
-                    # Уже записанные позиции текущего счета должны корректно
-                    # отображаться независимо от последующих изменений списка
-                    # заказов-оснований или организации строки заказа.
-                    current_invoice_items = Q(invoice_item__invoice=invoice)
-                    kwargs["queryset"] = OrderItem.objects.filter(
-                        new_item_filters | current_invoice_items
-                    ).distinct()
-                else:
-                    kwargs["queryset"] = OrderItem.objects.none()
-            else:
-                kwargs["queryset"] = OrderItem.objects.none()
-
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     @admin.display(description=_("Заказ"))
     def get_order_link(self, obj):
@@ -459,7 +507,7 @@ class InvoiceItemInline(TabularInline):
 
     @admin.display(description=_("Сумма"))
     def get_total(self, obj):
-        return obj.order_item.purchase_total_price if obj.order_item else "-"
+        return obj.total_price if obj and obj.pk else "—"
 
 
 class SalesInvoiceItemInlineForm(forms.ModelForm):
@@ -593,7 +641,7 @@ class PaymentOutItemInlineForm(forms.ModelForm):
         if invoice_field:
             invoice_field.queryset = invoice_field.queryset.annotate(
                 calculated_total=Coalesce(
-                    Sum("items__order_item__purchase_total_price"),
+                    Sum(F("items__quantity") * F("items__order_item__purchase_price")),
                     Value(Decimal("0.00")),
                     output_field=DecimalField(max_digits=20, decimal_places=2),
                 )
@@ -696,7 +744,7 @@ class PaymentOutItemInlineFormSet(BaseInlineFormSet):
                 continue
             if invoice.pk not in balances:
                 total = invoice.items.aggregate(
-                    total=Sum("order_item__purchase_total_price")
+                    total=Sum(F("quantity") * F("order_item__purchase_price"))
                 )["total"] or Decimal("0.00")
                 paid = PaymentOutItem.objects.filter(
                     invoice=invoice, payment__is_applied=True
@@ -734,7 +782,7 @@ class PaymentOutItemInline(TabularInline):
         invoice_total = (
             InvoiceItem.objects.filter(invoice_id=OuterRef("invoice_id"))
             .values("invoice_id")
-            .annotate(total=Sum("order_item__purchase_total_price"))
+            .annotate(total=Sum(F("quantity") * F("order_item__purchase_price")))
             .values("total")[:1]
         )
         paid_total = (
@@ -1022,7 +1070,7 @@ class PurchaseInvoiceForm(DocumentForm):
         required=False,
         initial=False,
         help_text=_(
-            "Автоматически добавит все доступные позиции из выбранных заказов"
+            "Добавит оставшееся количество из выбранных заказов. Учитываются только проведённые счета."
         ),
     )
 
@@ -1034,8 +1082,8 @@ class PurchaseInvoiceForm(DocumentForm):
 @admin.register(PurchaseInvoice)
 class PurchaseInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     form = PurchaseInvoiceForm
-    total_field = "items__order_item__purchase_total_price"
-    quantity_field = "items__order_item__quantity"
+    total_field = F("items__quantity") * F("items__order_item__purchase_price")
+    quantity_field = "items__quantity"
     product_field = "items__order_item__product"
     list_display = (
         "id",
@@ -1101,84 +1149,10 @@ class PurchaseInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def formfield_for_manytomany(self, db_field, request, **kwargs):
-        """
-        Фильтр заказов-оснований:
-        - Поставщик/Холдинг
-        - Статус 'Проведен'
-        - Наличие позиций без счета
-        - Организация айтемов совпадает с организацией счета
-        """
         if db_field.name == "orders":
-            object_id = request.resolver_match.kwargs.get("object_id")
-            if object_id:
-                invoice = self.get_object(request, object_id)
-                if invoice and invoice.supplier:
-                    # 1. Фильтр по поставщику
-                    vendor_query = Q(supplier=invoice.supplier)
-                    if invoice.supplier.parent_holding:
-                        vendor_query |= Q(supplier=invoice.supplier.parent_holding)
-
-                    # 2. Фильтр по айтемам с учетом организации
-                    # Нам нужны заказы, где есть хотя бы один айтем:
-                    # - без привязанного счета
-                    # - организация которого совпадает с организацией счета (если она там указана)
-
-                    item_filters = Q(items__invoice_item__isnull=True) | Q(
-                        items__invoice_item__invoice=invoice
-                    )
-
-                    # Если в счете указана организация, фильтруем заказы,
-                    # в которых есть айтемы именно для этой организации
-                    if invoice.organization:
-                        item_filters &= Q(items__organization=invoice.organization)
-
-                    kwargs["queryset"] = PurchaseOrder.objects.filter(
-                        vendor_query, item_filters, is_applied=True
-                    ).distinct()
-                else:
-                    kwargs["queryset"] = PurchaseOrder.objects.none()
-            else:
-                kwargs["queryset"] = PurchaseOrder.objects.none()
-
+            # The item formset validates the supplier and organization, including POST data.
+            kwargs["queryset"] = PurchaseOrder.objects.filter(is_applied=True, to_remove=False)
         return super().formfield_for_manytomany(db_field, request, **kwargs)
-
-    def save_model(self, request, obj, form, change):
-        # Сохраняем объект, чтобы ManyToMany связи (orders) пробросились в базу
-        super().save_model(request, obj, form, change)
-
-        if form.cleaned_data.get("fill_from_orders"):
-            # Передаем request в наш вспомогательный метод
-            self._fill_items_from_orders(request, obj)
-
-    def _fill_items_from_orders(self, request, obj):
-        """Логика автоматического наполнения позиций счета с учетом организации"""
-        filters = Q(
-            purchase_order__in=obj.orders.all(),
-            invoice_item__isnull=True,
-        )
-
-        if obj.organization:
-            filters &= Q(organization=obj.organization)
-
-        items_to_add = OrderItem.objects.filter(filters)
-
-        created_count = 0
-        for order_item in items_to_add:
-            _, created = InvoiceItem.objects.get_or_create(
-                invoice=obj,
-                order_item=order_item,
-                defaults={"sort_order": order_item.sort_order_purchase},
-            )
-            if created:
-                created_count += 1
-
-        # Теперь request здесь определен и сообщение сработает
-        if created_count > 0:
-            self.message_user(request, f"Добавлено позиций: {created_count}")
-        else:
-            self.message_user(
-                request, "Новых позиций для добавления не найдено", level="WARNING"
-            )
 
 
 class SalesInvoiceForm(DocumentForm):
