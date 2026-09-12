@@ -1036,6 +1036,12 @@ class PurchaseInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
 
     inlines = [InvoiceItemInline]
 
+    class Media:
+        js = [
+            "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
+            "documents/js/admin_sortable_init.js",
+        ]
+
     def formfield_for_foreignkey(self, db_field, request, **kwargs):
         """
         Фильтруем список банковских счетов в зависимости от выбранного поставщика.
