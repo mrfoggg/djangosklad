@@ -1106,11 +1106,11 @@ class CustomerOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
 
 class PurchaseInvoiceForm(DocumentForm):
     fill_from_orders = forms.BooleanField(
-        label=_("Заполнить по выбранным заказам"),
+        label=_("Заполнить остатками по заказам"),
         required=False,
         initial=False,
         help_text=_(
-            "Добавит оставшееся количество из выбранных заказов. Учитываются только проведённые счета."
+            "При сохранении добавит отсутствующие строки с оставшимся количеством из выбранных заказов. Учитываются только проведённые счета; уже введённые строки сохранятся."
         ),
     )
 

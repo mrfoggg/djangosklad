@@ -211,3 +211,20 @@ class PartialInvoiceTests(TestCase):
         field = forms[0].fields["order_item"]
         self.assertIn("Строка №2", field.label_from_instance(field.queryset.get(pk=third.pk)))
         self.assertIn("Строка №3", field.label_from_instance(field.queryset.get(pk=second.pk)))
+
+
+    def test_fill_collects_remaining_quantities_from_multiple_orders(self):
+        self.assert_saved(self.post_invoice(6, applied=True))
+        second_order = PurchaseOrder.objects.create(
+            supplier=self.supplier, organization=self.organization, is_applied=True,
+        )
+        second_item = OrderItem.objects.create(
+            purchase_order=second_order, organization=self.organization,
+            warehouse=self.warehouse, product=self.product, quantity=3, purchase_price=200,
+        )
+        self.assert_saved(self.post_invoice(fill=True, orders=[self.order.pk, second_order.pk]))
+        invoice = PurchaseInvoice.objects.latest("pk")
+        self.assertEqual(
+            dict(invoice.items.values_list("order_item_id", "quantity")),
+            {self.item.pk: Decimal("4"), second_item.pk: Decimal("3")},
+        )
