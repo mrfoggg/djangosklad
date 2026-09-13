@@ -1,16 +1,21 @@
 from decimal import Decimal
+from urllib.parse import urlencode
 
 from django import forms
 from django.contrib import admin
+from django.core.exceptions import PermissionDenied
+from django.http import Http404, HttpResponseRedirect
 from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value, Window
 from django.db.models.functions import Coalesce, RowNumber
 from django.forms.models import BaseInlineFormSet
 from django.urls import reverse
 from django.utils.formats import number_format
+from django.utils.timezone import localdate
 from django.utils.html import format_html, format_html_join
 from django.utils.translation import gettext_lazy as _
 from djmoney.models.fields import MoneyField
 from unfold.admin import ModelAdmin, TabularInline
+from unfold.decorators import action
 from unfold.widgets import (
     UnfoldAdminDecimalFieldWidget,
     UnfoldAdminMoneyWidget,
@@ -42,6 +47,7 @@ from .receipts import receipt_order_items
 from .invoices import invoice_order_items, with_invoice_balance
 from .order_lines import with_order_position
 from .order_summary import supplier_order_summary
+from .source_order_admin import SourceOrderAdminMixin, SourceOrderFormSetMixin
 
 
 BASE_READONLY_DATES = ("created", "updated")
@@ -436,7 +442,7 @@ class PurchaseInvoiceItemInlineForm(forms.ModelForm):
         return f"Заказ №{number} | Строка №{obj.order_position_number} | {obj.product.name} | Осталось {remaining:f} {obj.product.unit.symbol}"
 
 
-class InvoiceItemFormSet(BaseInlineFormSet):
+class InvoiceItemFormSet(SourceOrderFormSetMixin, BaseInlineFormSet):
     def get_form_kwargs(self, index):
         kwargs = super().get_form_kwargs(index)
         context = PurchaseInvoice(pk=self.instance.pk, organization_id=None)
@@ -456,7 +462,7 @@ class InvoiceItemFormSet(BaseInlineFormSet):
     def selected_order_ids(self):
         if self.is_bound:
             return [int(value) for value in self.data.getlist("orders") if value.isdigit()]
-        return list(self.instance.orders.values_list("pk", flat=True)) if self.instance.pk else []
+        return list(self.instance.orders.values_list("pk", flat=True)) if self.instance.pk else getattr(self.instance, "_selected_order_ids", [])
 
     def clean(self):
         super().clean()
@@ -1030,7 +1036,7 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
         "order_total",
         "order_quantity",
         "product_count",
-        "linked_invoices", "linked_receipts", "delivery_summary", "payment_summary",
+        "linked_invoices", "linked_receipts", "linked_customer_orders", "delivery_summary", "payment_summary",
     )
     list_display = (
         "id",
@@ -1049,7 +1055,7 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     fields = BASE_FIELDS + (
         "supplier", "price_type", "comment",
         ("order_total", "order_quantity", "product_count"),
-        "linked_invoices", "linked_receipts", "delivery_summary", "payment_summary",
+        "linked_invoices", "linked_receipts", "linked_customer_orders", "delivery_summary", "payment_summary",
     )
 
     @staticmethod
@@ -1064,18 +1070,41 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
             return _("Не определено: не заполнены цены")
         return _("%(amount)s грн") % {"amount": number_format(value, decimal_pos=2, use_l10n=True)}
 
-    @staticmethod
-    def _document_links(documents, model_name, number_field, date_field):
+    def _document_links(self, documents, model_name, number_field, date_field):
         entries = []
         for document in documents:
             number = getattr(document, number_field) or "—"
             date = getattr(document, date_field)
-            label = f"№{document.pk} · Документ поставщика: {number}"
             if date:
-                label += f" от {date:%d.%m.%Y}"
-            status = _("Проведён") if document.is_applied else _("Черновик")
-            entries.append((reverse(f"admin:documents_{model_name}_change", args=[document.pk]), label, status))
-        return format_html_join("", '<div><a href="{}">{}</a> — {}</div>', entries) or "—"
+                date_label = _("Дата документа поставщика: %(date)s") % {"date": f"{date:%d.%m.%Y}"}
+            elif document.is_applied and document.dt_applied:
+                date_label = _("Проведён: %(date)s") % {"date": f"{localdate(document.dt_applied):%d.%m.%Y}"}
+            else:
+                date_label = _("Создан: %(date)s") % {"date": f"{localdate(document.created):%d.%m.%Y}"}
+            label = f"№{document.pk} · Документ поставщика: {number}"
+            if date or not (document.is_applied and document.dt_applied):
+                status = _("Проведён") if document.is_applied else _("Черновик")
+                date_label = f"{date_label} · {status}"
+            details = _("Сумма документа: %(amount)s") % {"amount": self._money(document.summary_total)}
+            if model_name == "purchaseinvoice":
+                paid = document.summary_paid
+                total = document.summary_total
+                if total is not None and paid == total:
+                    payment_status = _("Оплачен")
+                else:
+                    payment_status = _("Оплачено: %(amount)s") % {"amount": self._money(paid)}
+                    if total is None:
+                        payment_status += _(" · Остаток не определён: не заполнены цены")
+                    elif paid < total:
+                        payment_status += _(" · Не оплачено: %(amount)s") % {"amount": self._money(total - paid)}
+                    else:
+                        payment_status += _(" · Переплата: %(amount)s") % {"amount": self._money(paid - total)}
+                details += f" · {payment_status}"
+            entries.append((reverse(f"admin:documents_{model_name}_change", args=[document.pk]),
+                            label, document.supplier, date_label, details))
+        return format_html_join(
+            "", '<div class="mb-3"><div><a href="{}">{}</a> · {} · {}</div><div>{}</div></div>', entries,
+        ) or "—"
 
     @admin.display(description=_("Связанные счета"))
     def linked_invoices(self, obj):
@@ -1090,6 +1119,31 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
             return "—"
         return self._document_links(self._summary(obj)["receipts"], "goodsreceipt",
                                     "supplier_delivery_note_number", "supplier_delivery_note_date")
+
+    @admin.display(description=_("Связанные заказы покупателей"))
+    def linked_customer_orders(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        orders = CustomerOrder.objects.filter(
+            pk__in=obj.items.values("customer_order_id"),
+        ).select_related("customer").prefetch_related("items").order_by("pk")
+        entries = []
+        for order in orders:
+            items = list(order.items.all())
+            total = None if any(item.customer_price is None for item in items) else sum(
+                (item.quantity * item.customer_price for item in items), Decimal("0"),
+            )
+            entries.append((
+                reverse("admin:documents_customerorder_change", args=[order.pk]),
+                f"№{order.pk}", order.customer,
+                f"{localdate(order.created):%d.%m.%Y}",
+                _("Проведён") if order.is_applied else _("Черновик"),
+                self._money(total),
+            ))
+        return format_html_join(
+            "", '<div class="mb-3"><div><a href="{}">{}</a> · {} · Создан: {} · {}</div>'
+            '<div>Сумма заказа: {}</div></div>', entries,
+        ) or "—"
 
     @admin.display(description=_("Итоги поставки"))
     def delivery_summary(self, obj):
@@ -1130,6 +1184,40 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
         paid = self._money(summary["paid"]) if summary["paid"] is not None else _("Не удалось распределить оплату общего счёта")
         return format_html('<div><strong>Оплачено{}:</strong> {}</div><div>{}</div><div>{}</div>',
                            _(" (расчётно)") if summary["estimated"] else "", paid, status, note)
+
+    actions_detail = [{
+        "title": _("Создать на основании"), "icon": "add_circle",
+        "items": ["create_supplier_invoice", "create_goods_receipt"],
+    }]
+
+    def _can_create_from_order(self, request, object_id, target):
+        order = self.get_object(request, object_id) if object_id else None
+        return bool(order and order.is_applied and not order.to_remove
+                    and self.has_view_permission(request, order)
+                    and self.admin_site._registry[target].has_add_permission(request))
+
+    def has_create_supplier_invoice_permission(self, request, object_id=None):
+        return self._can_create_from_order(request, object_id, PurchaseInvoice)
+
+    def has_create_goods_receipt_permission(self, request, object_id=None):
+        return self._can_create_from_order(request, object_id, GoodsReceipt)
+
+    def _create_from_order(self, request, object_id, target):
+        order = self.get_object(request, object_id)
+        if order is None:
+            raise Http404
+        if not self._can_create_from_order(request, object_id, target):
+            raise PermissionDenied
+        url = reverse(f"admin:documents_{target._meta.model_name}_add")
+        return HttpResponseRedirect(f"{url}?{urlencode({'from_order': order.pk})}")
+
+    @action(description=_("Счёт поставщика"), permissions=["create_supplier_invoice"])
+    def create_supplier_invoice(self, request, object_id):
+        return self._create_from_order(request, object_id, PurchaseInvoice)
+
+    @action(description=_("Поступление товаров"), permissions=["create_goods_receipt"])
+    def create_goods_receipt(self, request, object_id):
+        return self._create_from_order(request, object_id, GoodsReceipt)
 
     class Media:
         js = [
@@ -1207,7 +1295,7 @@ class PurchaseInvoiceForm(DocumentForm):
 
 
 @admin.register(PurchaseInvoice)
-class PurchaseInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
+class PurchaseInvoiceAdmin(SourceOrderAdminMixin, OrderTotalsAdminMixin, BaseDocumentAdmin):
     form = PurchaseInvoiceForm
     total_field = F("items__quantity") * F("items__order_item__purchase_price")
     quantity_field = "items__quantity"
@@ -1559,7 +1647,7 @@ class GoodsReceiptItemForm(forms.ModelForm):
         )
 
 
-class GoodsReceiptItemFormSet(BaseInlineFormSet):
+class GoodsReceiptItemFormSet(SourceOrderFormSetMixin, BaseInlineFormSet):
     def get_form_kwargs(self, index):
         kwargs = super().get_form_kwargs(index)
         context = GoodsReceipt(pk=self.instance.pk, organization_id=None)
@@ -1577,7 +1665,7 @@ class GoodsReceiptItemFormSet(BaseInlineFormSet):
         if self.is_bound:
             values = self.data.getlist("orders")
             return [int(value) for value in values if str(value).isdigit()]
-        return list(self.instance.orders.values_list("pk", flat=True)) if self.instance.pk else []
+        return list(self.instance.orders.values_list("pk", flat=True)) if self.instance.pk else getattr(self.instance, "_selected_order_ids", [])
 
     def clean(self):
         super().clean()
@@ -1655,7 +1743,7 @@ class GoodsReceiptItemInline(TabularInline):
 
 
 @admin.register(GoodsReceipt)
-class GoodsReceiptAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
+class GoodsReceiptAdmin(SourceOrderAdminMixin, OrderTotalsAdminMixin, BaseDocumentAdmin):
     form = GoodsReceiptForm
     total_field = F("items__quantity") * F("items__order_item__purchase_price")
     product_field = "items__order_item__product"

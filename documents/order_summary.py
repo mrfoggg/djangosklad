@@ -30,15 +30,28 @@ def supplier_order_summary(order):
 
     invoices = list(PurchaseInvoice.objects.filter(
         Q(orders=order) | Q(items__order_item__purchase_order=order),
-    ).distinct().order_by("pk").prefetch_related(Prefetch(
+    ).distinct().order_by("pk").select_related("supplier").prefetch_related(Prefetch(
         "items", queryset=InvoiceItem.objects.select_related("order_item"),
     )))
     receipts = list(GoodsReceipt.objects.filter(
         Q(orders=order) | Q(items__order_item__purchase_order=order),
-    ).distinct().order_by("pk"))
+    ).distinct().order_by("pk").select_related("supplier").prefetch_related(Prefetch(
+        "items", queryset=GoodsReceiptItem.objects.select_related("order_item"),
+    )))
     payments = dict(PaymentOutItem.objects.filter(
         invoice_id__in=[invoice.pk for invoice in invoices], payment__is_applied=True,
     ).values("invoice_id").annotate(total=Sum("amount")).values_list("invoice_id", "total"))
+    for document in [*invoices, *receipts]:
+        document_lines = list(document.items.all())
+        if any(line.order_item.purchase_price is None for line in document_lines):
+            document.summary_total = None
+        else:
+            document.summary_total = sum(
+                (line.quantity * line.order_item.purchase_price for line in document_lines), ZERO,
+            ).quantize(Decimal("0.01"))
+    for invoice in invoices:
+        invoice.summary_paid = payments.get(invoice.pk, ZERO).quantize(Decimal("0.01"))
+
     paid = ZERO
     estimated = False
     for invoice in invoices:

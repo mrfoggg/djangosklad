@@ -955,16 +955,28 @@ class GoodsReceipt(BaseDocumentModel):
     )
     comment = models.TextField(_("Комментарий"), blank=True)
 
+    def get_order_supplier_ids(self):
+        if not self.supplier_id:
+            return []
+        ids = [self.supplier_id]
+        holding_id = Contractor.objects.filter(pk=self.supplier_id).values_list(
+            "parent_holding_id", flat=True,
+        ).first()
+        if holding_id:
+            ids.append(holding_id)
+        return ids
+
     def clean(self):
         super().clean()
         order_ids = getattr(self, "_selected_order_ids", None)
         if order_ids is None:
             order_ids = self.orders.values_list("pk", flat=True) if self.pk else []
+        supplier_ids = self.get_order_supplier_ids()
         for order in PurchaseOrder.objects.filter(pk__in=order_ids):
             if not order.is_applied or order.to_remove:
                 raise ValidationError({"orders": _("Выберите проведённые заказы поставщику без пометки на удаление.")})
-            if order.supplier_id != self.supplier_id:
-                raise ValidationError({"orders": _("Все заказы должны принадлежать поставщику поступления.")})
+            if order.supplier_id not in supplier_ids:
+                raise ValidationError({"orders": _("Все заказы должны принадлежать поставщику поступления или его холдингу.")})
             if order.organization_id and self.organization_id != order.organization_id:
                 raise ValidationError({"organization": _("Организация поступления должна совпадать с организацией заказа.")})
         if self.is_applied and self.to_remove:
@@ -1014,7 +1026,7 @@ class GoodsReceiptItem(models.Model):
                 order_ids = receipt.orders.values_list("pk", flat=True)
             if not item.purchase_order_id or (order_ids is not None and item.purchase_order_id not in order_ids):
                 raise ValidationError({"order_item": _("Строка не принадлежит выбранным заказам поставщику.")})
-            if item.purchase_order.supplier_id != receipt.supplier_id:
+            if item.purchase_order.supplier_id not in receipt.get_order_supplier_ids():
                 raise ValidationError({"order_item": _("Поставщик строки заказа не совпадает с поступлением.")})
             organization_id = item.organization_id or (
                 item.purchase_order.organization_id if item.purchase_order_id else None

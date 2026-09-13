@@ -6,8 +6,8 @@ from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from django.utils import translation
 
-from catalogs.models import Contractor, MeasurementUnit, Organization, Product, Warehouse
-from documents.models import GoodsReceipt, GoodsReceiptItem, InvoiceItem, OrderItem, PaymentOrderOut, PaymentOutItem, PurchaseInvoice, PurchaseOrder
+from catalogs.models import Contractor, MeasurementUnit, Organization, Product, RetailStore, Warehouse
+from documents.models import CustomerOrder, GoodsReceipt, GoodsReceiptItem, InvoiceItem, OrderItem, PaymentOrderOut, PaymentOutItem, PurchaseInvoice, PurchaseOrder
 from documents.order_summary import supplier_order_summary
 
 
@@ -127,3 +127,100 @@ class SupplierOrderSummaryTests(TestCase):
         self.assertEqual(response.status_code, 200)
         for label in ("Связанные счета", "Связанные поступления", "Итоги поставки", "Итоги оплаты заказа", "Ожидается"):
             self.assertContains(response, label)
+
+    def test_invoice_link_shows_supplier_date_total_and_payment_difference(self):
+        from datetime import date
+
+        invoice = self.invoice()
+        invoice.supplier_invoice_number = "СЧ-15"
+        invoice.supplier_invoice_date = date(2026, 9, 10)
+        invoice.save()
+        self.pay(invoice, 400)
+        order_admin = admin.site._registry[PurchaseOrder]
+        html = str(order_admin.linked_invoices(PurchaseOrder.objects.get(pk=self.order.pk)))
+        for value in (str(self.supplier), "10.09.2026", "СЧ-15", "Сумма документа", "Оплачено", "Не оплачено"):
+            self.assertIn(value, html)
+        self.assertIn(str(order_admin._money(Decimal("1000"))), html)
+        self.assertIn(str(order_admin._money(Decimal("600"))), html)
+        self.pay(invoice, 600)
+        html = str(order_admin.linked_invoices(PurchaseOrder.objects.get(pk=self.order.pk)))
+        self.assertIn("Оплачен", html)
+        self.assertNotIn("Оплачено:", html)
+        self.pay(invoice, 200)
+        html = str(order_admin.linked_invoices(PurchaseOrder.objects.get(pk=self.order.pk)))
+        self.assertIn("Переплата", html)
+        self.assertIn(str(order_admin._money(Decimal("1200"))), html)
+        self.assertIn(str(order_admin._money(Decimal("200"))), html)
+
+    def test_receipt_link_shows_full_document_total_for_shared_receipt(self):
+        from datetime import date
+
+        receipt = self.receipt(4)
+        receipt.supplier_delivery_note_date = date(2026, 9, 11)
+        receipt.save()
+        other = PurchaseOrder.objects.create(supplier=self.supplier, organization=self.organization, is_applied=True)
+        line = OrderItem.objects.create(purchase_order=other, organization=self.organization, product=self.product,
+                                        warehouse=self.warehouse, quantity=2, purchase_price=300)
+        GoodsReceiptItem.objects.create(receipt=receipt, order_item=line, quantity=2)
+        order_admin = admin.site._registry[PurchaseOrder]
+        html = str(order_admin.linked_receipts(self.order))
+        self.assertIn("11.09.2026", html)
+        self.assertIn(str(self.supplier), html)
+        self.assertIn(str(order_admin._money(Decimal("1000"))), html)
+        self.assertNotIn("Оплачено", html)
+
+    def test_document_links_show_fallback_date_and_ignore_draft_payments(self):
+        invoice = self.invoice(applied=False)
+        self.pay(invoice, 1000, applied=False)
+        order_admin = admin.site._registry[PurchaseOrder]
+        html = str(order_admin.linked_invoices(self.order))
+        self.assertIn("Создан:", html)
+        self.assertIn("Не оплачено:", html)
+        self.assertIn(str(order_admin._money(Decimal("1000"))), html)
+
+
+    def test_related_customer_orders_are_unique_and_show_full_sales_total(self):
+        customer = Contractor.objects.create(last_name="Покупатель итогов", is_customer=True)
+        store = RetailStore.objects.create(name="Магазин итогов")
+        customer_order = CustomerOrder.objects.create(
+            customer=customer, retail_store=store, organization=self.organization,
+        )
+        unrelated = CustomerOrder.objects.create(
+            customer=customer, retail_store=store, organization=self.organization,
+        )
+        self.line.customer_order = customer_order
+        self.line.customer_price = 150
+        self.line.save()
+        OrderItem.objects.create(
+            purchase_order=self.order, customer_order=customer_order,
+            organization=self.organization, product=self.product,
+            warehouse=self.warehouse, quantity=2, purchase_price=100, customer_price=200,
+        )
+        OrderItem.objects.create(
+            customer_order=customer_order, organization=self.organization, product=self.product,
+            warehouse=self.warehouse, quantity=1, customer_price=300,
+        )
+        model_admin = admin.site._registry[PurchaseOrder]
+        html = str(model_admin.linked_customer_orders(self.order))
+        url = reverse("admin:documents_customerorder_change", args=[customer_order.pk])
+        self.assertEqual(html.count(f'href="{url}"'), 1)
+        self.assertNotIn(reverse("admin:documents_customerorder_change", args=[unrelated.pk]), html)
+        self.assertIn("Покупатель итогов", html)
+        self.assertIn("2200,00 грн", html)
+        self.assertIn("Черновик", html)
+        self.assertIn("linked_customer_orders", model_admin.readonly_fields)
+        self.assertIn("linked_customer_orders", model_admin.fields)
+
+    def test_related_customer_orders_empty_and_missing_prices(self):
+        model_admin = admin.site._registry[PurchaseOrder]
+        self.assertEqual(model_admin.linked_customer_orders(None), "—")
+        self.assertEqual(model_admin.linked_customer_orders(PurchaseOrder()), "—")
+        self.assertEqual(model_admin.linked_customer_orders(self.order), "—")
+        customer = Contractor.objects.create(last_name="Без цены", is_customer=True)
+        order = CustomerOrder.objects.create(
+            customer=customer, retail_store=RetailStore.objects.create(name="Без цены"),
+            organization=self.organization,
+        )
+        self.line.customer_order = order
+        self.line.save()
+        self.assertIn("Не определено: не заполнены цены", model_admin.linked_customer_orders(self.order))

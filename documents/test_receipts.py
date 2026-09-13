@@ -378,3 +378,38 @@ class GoodsReceiptTests(TestCase):
             dict(receipt.items.values_list("order_item_id", "quantity")),
             {self.item.pk: Decimal("6"), second_item.pk: Decimal("5")},
         )
+
+    def test_subsidiary_can_receive_and_fill_holding_order(self):
+        holding = Contractor.objects.create(last_name="Холдинг", legal_type="HLD", is_supplier=True)
+        self.supplier.parent_holding = holding
+        self.supplier.save()
+        self.order.supplier = holding
+        self.order.save()
+        self.assert_saved(self.post_receipt(quantity=6, applied=True))
+        self.assert_saved(self.post_receipt(fill=True, applied=True))
+        receipt = GoodsReceipt.objects.latest("pk")
+        self.assertEqual(receipt.supplier_id, self.supplier.pk)
+        self.assertEqual(receipt.items.get().quantity, Decimal("4"))
+        self.assertEqual(receipt.items.get().order_item_id, self.item.pk)
+        receipt.full_clean()
+        receipt.items.get().full_clean()
+        self.assertEqual(self.balance(), Decimal("0"))
+
+    def test_sibling_company_order_is_not_accepted(self):
+        holding = Contractor.objects.create(last_name="Общий холдинг", legal_type="HLD", is_supplier=True)
+        sibling = Contractor.objects.create(last_name="Другая дочерняя", parent_holding=holding, is_supplier=True)
+        self.supplier.parent_holding = holding
+        self.supplier.save()
+        self.order.supplier = sibling
+        self.order.save()
+        response = self.post_receipt(quantity=1)
+        self.assertContains(response, "Все заказы должны принадлежать поставщику поступления или его холдингу")
+        self.assertFalse(GoodsReceipt.objects.exists())
+
+    def test_holding_does_not_receive_subsidiary_order(self):
+        holding = Contractor.objects.create(last_name="Родитель", legal_type="HLD", is_supplier=True)
+        self.supplier.parent_holding = holding
+        self.supplier.save()
+        response = self.post_receipt(quantity=1, supplier=holding.pk)
+        self.assertContains(response, "Все заказы должны принадлежать поставщику поступления или его холдингу")
+        self.assertFalse(GoodsReceipt.objects.exists())

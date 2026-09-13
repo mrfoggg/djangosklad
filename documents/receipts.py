@@ -18,7 +18,7 @@ def receipt_order_items(receipt, order_ids=None):
     received = received.order_by().values("order_item_id").annotate(total=Sum("quantity"))
     return OrderItem.objects.filter(
         purchase_order_id__in=order_ids,
-        purchase_order__supplier_id=receipt.supplier_id,
+        purchase_order__supplier_id__in=receipt.get_order_supplier_ids(),
         purchase_order__is_applied=True,
         purchase_order__to_remove=False,
     ).filter(

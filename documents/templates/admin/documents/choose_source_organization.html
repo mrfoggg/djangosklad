@@ -1,0 +1,13 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+{% block content %}
+<div class="max-w-xl">
+    <p class="mb-4">{{ source_order }}</p>
+    <p class="mb-4">{% translate "В заказе несколько организаций. Выберите организацию для нового документа." %}</p>
+    <form method="get">
+        <input type="hidden" name="from_order" value="{{ source_order.pk }}">
+        {{ form.as_p }}
+        <button type="submit" class="bg-primary-600 text-white px-4 py-2 rounded-default mt-4">{% translate "Продолжить" %}</button>
+    </form>
+</div>
+{% endblock %}
