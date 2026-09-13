@@ -456,6 +456,14 @@ class OrderItem(models.Model):
     def __str__(self):
         return f"{self.product.name} ({self.quantity})"
 
+    def validate_sales_lock(self):
+        if not self.pk or not self.sales_document_items.filter(document__is_applied=True).exists():
+            return
+        previous = type(self).objects.get(pk=self.pk)
+        fields = ("customer_price", "product_id", "quantity", "organization_id", "customer_order_id", "warehouse_id")
+        if any(getattr(self, field) != getattr(previous, field) for field in fields):
+            raise ValidationError(_("Строка заказа связана с проведённой реализацией. Сначала снимите проведение реализации."))
+
     def validate_receipt_lock(self):
         if not self.pk or not self.receipt_items.filter(receipt__is_applied=True).exists():
             return
@@ -467,6 +475,7 @@ class OrderItem(models.Model):
     def clean(self):
         super().clean()
         self.validate_receipt_lock()
+        self.validate_sales_lock()
 
     def save(self, *args, **kwargs):
         print("SAVE OrderItem")
@@ -479,6 +488,7 @@ class OrderItem(models.Model):
                 self.organization = parent_order.organization
 
         self.validate_receipt_lock()
+        self.validate_sales_lock()
         super().save(*args, **kwargs)
 
     # def delete(self, *args, **kwargs):
@@ -753,6 +763,121 @@ class BaseBankPayment(BaseDocumentModel):
 
     class Meta:
         abstract = True
+
+
+class PaymentOrderIn(BaseBankPayment):
+    """Входящий банковский платёж."""
+
+    class Category(models.TextChoices):
+        GOODS_SERVICES = "goods_services", _("За товары и услуги")
+        SUPPLIER_REFUND = "supplier_refund", _("Возврат товара поставщику")
+        OTHER = "other", _("Прочие")
+
+    payment_number = models.CharField(_("Номер платёжного документа"), max_length=100)
+    verification_code = models.CharField(_("Код проверки"), max_length=255, blank=True)
+    uetr = models.UUIDField(_("UETR СЕП"), blank=True, null=True)
+    category = models.CharField(
+        _("Категория платежа"), max_length=20, choices=Category.choices,
+        default=Category.GOODS_SERVICES,
+    )
+    our_bank_account = models.ForeignKey(
+        "catalogs.OurBankAccount", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="incoming_payments", verbose_name=_("На наш счет"),
+    )
+    amount = models.DecimalField(
+        max_digits=12, decimal_places=2, verbose_name=_("Сумма"),
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+
+    def clean(self):
+        super().clean()
+        if (
+            self.contractor_bank_account_id
+            and self.contractor_id
+            and self.contractor_bank_account.contractor_id != self.contractor_id
+        ):
+            raise ValidationError(
+                {
+                    "contractor_bank_account": _(
+                        "Банковский счет не принадлежит выбранному контрагенту."
+                    )
+                }
+            )
+
+        if (
+            self.our_bank_account_id
+            and self.organization_id
+            and self.our_bank_account.organization_id != self.organization_id
+        ):
+            raise ValidationError(
+                {
+                    "our_bank_account": _(
+                        "Банковский счет не принадлежит выбранной организации."
+                    )
+                }
+            )
+
+        if self.is_applied and not self.contractor_bank_account_id and self.contractor_id:
+            accounts = self.contractor.bank_accounts.all()
+            if not accounts.exists():
+                raise ValidationError(
+                    {
+                        "is_applied": _(
+                            "Невозможно провести платеж — у контрагента нет банковских счетов."
+                        )
+                    }
+                )
+            if not self.contractor.primary_account_id:
+                raise ValidationError(
+                    {
+                        "contractor_bank_account": _(
+                            "У контрагента есть банковские счета, но основной счет не выбран."
+                        )
+                    }
+                )
+
+        if not self.is_applied or self.our_bank_account_id or not self.organization_id:
+            return
+
+        accounts = self.organization.our_accounts.all()
+        if accounts.filter(is_default=True).exists():
+            return
+        if not accounts.exists():
+            raise ValidationError(
+                {
+                    "is_applied": _(
+                        "Невозможно провести платеж — у организации нет банковских счетов."
+                    )
+                }
+            )
+        raise ValidationError(
+            {
+                "our_bank_account": _(
+                    "У организации есть банковские счета, но основной счет не выбран."
+                )
+            }
+        )
+
+    def save(self, *args, **kwargs):
+        if not self.our_bank_account_id and self.organization_id:
+            self.our_bank_account = self.organization.our_accounts.filter(
+                is_default=True
+            ).first()
+        if not self.contractor_bank_account_id and self.contractor_id:
+            self.contractor_bank_account = self.contractor.bank_accounts.filter(
+                pk=self.contractor.primary_account_id
+            ).first()
+        super().save(*args, **kwargs)
+
+    class Meta:
+        verbose_name = _("Платеж входящий")
+        verbose_name_plural = _("Платежи входящие")
+        constraints = [
+            models.CheckConstraint(condition=models.Q(amount__gt=0), name="incoming_payment_amount_positive"),
+        ]
+
+    def __str__(self):
+        return f"{self._meta.verbose_name} №{self.payment_number} · {self.contractor}"
 
 
 class PaymentOrderOut(BaseBankPayment):
@@ -1043,3 +1168,98 @@ class GoodsReceiptItem(models.Model):
             models.UniqueConstraint(fields=("receipt", "order_item"), name="unique_receipt_order_item"),
             models.CheckConstraint(condition=models.Q(quantity__gt=0), name="receipt_quantity_positive"),
         ]
+
+
+class SalesDocument(BaseDocumentModel):
+    customer = models.ForeignKey(
+        "catalogs.Contractor", on_delete=models.PROTECT, related_name="sales_documents",
+        limit_choices_to={"is_customer": True}, verbose_name=_("Покупатель"),
+    )
+    delivery_note_number = models.CharField(_("Номер расходной накладной"), max_length=100, blank=True)
+    delivery_note_date = models.DateField(_("Дата расходной накладной"), blank=True, null=True)
+    comment = models.TextField(_("Комментарий"), blank=True)
+
+    orders = models.ManyToManyField(
+        "CustomerOrder", related_name="sales_documents", blank=True,
+        verbose_name=_("Основание: Заказы покупателей"),
+    )
+
+    def clean(self):
+        super().clean()
+        order_ids = getattr(self, "_selected_order_ids", None)
+        if order_ids is None:
+            order_ids = self.orders.values_list("pk", flat=True) if self.pk else []
+        for order in CustomerOrder.objects.filter(pk__in=order_ids):
+            if not order.is_applied or order.to_remove:
+                raise ValidationError({"orders": _("Выберите проведённые заказы покупателей без пометки на удаление.")})
+            if order.customer_id != self.customer_id:
+                raise ValidationError({"orders": _("Все заказы должны принадлежать покупателю реализации.")})
+            if (order.organization_id != self.organization_id
+                    and not order.items.filter(organization_id=self.organization_id).exists()):
+                raise ValidationError({"organization": _("Организация реализации должна совпадать с организацией заказа или его строк.")})
+        if self.is_applied and self.to_remove:
+            raise ValidationError({"to_remove": _("Проведённый документ нельзя пометить на удаление.")})
+
+    class Meta:
+        verbose_name = _("Реализация товаров и услуг")
+        verbose_name_plural = _("Реализации товаров и услуг")
+
+    def __str__(self):
+        return f"{self._meta.verbose_name} №{self.delivery_note_number or self.pk or '—'}"
+
+
+class SalesDocumentItem(models.Model):
+    document = models.ForeignKey(SalesDocument, on_delete=models.CASCADE, related_name="items")
+    order_item = models.ForeignKey(
+        OrderItem, on_delete=models.PROTECT, related_name="sales_document_items",
+        verbose_name=_("Строка заказа покупателя"),
+        limit_choices_to={"customer_order__isnull": False},
+    )
+    quantity = models.DecimalField(
+        _("Количество"), max_digits=14, decimal_places=6,
+        validators=[MinValueValidator(Decimal("0.000001"))],
+    )
+    @property
+    def total_price(self):
+        price = self.order_item.customer_price
+        if price is None or self.quantity is None:
+            return None
+        return (self.quantity * price).quantize(Decimal("0.01"))
+
+    sort_order = models.PositiveIntegerField(_("Порядок"), default=0, db_index=True)
+
+    def clean(self):
+        super().clean()
+        if not self.order_item_id:
+            return
+        item = self.order_item
+        if self.quantity is not None:
+            places = max(0, -self.quantity.normalize().as_tuple().exponent)
+            if places > item.product.unit.decimal_places:
+                raise ValidationError({"quantity": _("Количество не соответствует точности единицы измерения товара.")})
+        if self.document_id or "document" in self._state.fields_cache:
+            document = self.document
+            order_ids = getattr(document, "_selected_order_ids", None)
+            if order_ids is None and document.pk:
+                order_ids = document.orders.values_list("pk", flat=True)
+            if not item.customer_order_id or (order_ids is not None and item.customer_order_id not in order_ids):
+                raise ValidationError({"order_item": _("Строка не принадлежит выбранным заказам покупателя.")})
+            if item.customer_order.customer_id != document.customer_id:
+                raise ValidationError({"order_item": _("Покупатель строки заказа не совпадает с реализацией.")})
+            organization_id = item.organization_id or (
+                item.customer_order.organization_id if item.customer_order_id else None
+            )
+            if organization_id != document.organization_id:
+                raise ValidationError({"order_item": _("Организация строки заказа не совпадает с реализацией.")})
+
+    class Meta:
+        verbose_name = _("Позиция реализации")
+        verbose_name_plural = _("Позиции реализации")
+        ordering = ("sort_order", "pk")
+        constraints = [
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name="sales_document_quantity_positive"),
+            models.UniqueConstraint(fields=("document", "order_item"), name="unique_sales_document_order_item"),
+        ]
+
+    def __str__(self):
+        return str(self.order_item)

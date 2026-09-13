@@ -28,10 +28,13 @@ from catalogs.models import ContractorBankAccount, OurBankAccount
 
 from .models import (
     CustomerOrder,
+    SalesDocument,
+    SalesDocumentItem,
     GoodsReceipt,
     GoodsReceiptItem,
     InvoiceItem,
     OrderItem,
+    PaymentOrderIn,
     PaymentOrderOut,
     PaymentOutItem,
     PurchaseInvoice,
@@ -1536,6 +1539,35 @@ class SalesInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
             )
 
 
+class PaymentOrderInForm(PaymentOrderOutForm):
+    class Meta(PaymentOrderOutForm.Meta):
+        model = PaymentOrderIn
+
+
+@admin.register(PaymentOrderIn)
+class PaymentOrderInAdmin(BaseDocumentAdmin):
+    form = PaymentOrderInForm
+    list_display = (
+        "id", "payment_number", "contractor", "organization", "category",
+        "amount", "is_applied", "created",
+    )
+    list_display_links = ("id", "payment_number")
+    list_filter = ("category", "is_applied", "organization")
+    search_fields = ("payment_number", "verification_code", "uetr")
+    fields = BASE_FIELDS[:-1] + (
+        "payment_number", ("verification_code", "uetr"), "category",
+        ("organization", "our_bank_account"),
+        ("contractor", "contractor_bank_account"), "amount",
+    )
+    conditional_fields = {
+        **BaseDocumentAdmin.conditional_fields,
+        "our_bank_account": "organization",
+    }
+
+    class Media:
+        js = ["documents/js/admin_payment_bank_accounts.js"]
+
+
 @admin.register(PaymentOrderOut)
 class PaymentOrderOutAdmin(BaseDocumentAdmin):
     form = PaymentOrderOutForm
@@ -1789,6 +1821,183 @@ class GoodsReceiptAdmin(SourceOrderAdminMixin, OrderTotalsAdminMixin, BaseDocume
     readonly_fields = BASE_READONLY + ( "order_total", "order_quantity", "product_count")
     inlines = (GoodsReceiptItemInline,)
 
+    filter_horizontal = ("orders",)
+
+    class Media:
+        js = [
+            "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
+            "documents/js/admin_sortable_init.js?v=2",
+            "documents/js/admin_quantity_step.js",
+        ]
+
+
+
+from .sales import sales_order_items
+
+class SalesDocumentForm(DocumentForm):
+    fill_from_order = forms.BooleanField(
+        label=_("Заполнить остатками по заказам"), required=False,
+        help_text=_("Добавит отсутствующие строки с нереализованным количеством при сохранении. Уже введённые строки сохранятся."),
+    )
+
+    class Meta:
+        model = SalesDocument
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["orders"].queryset = CustomerOrder.objects.filter(
+            is_applied=True, to_remove=False,
+        )
+
+    def clean(self):
+        data = super().clean()
+        self.instance._selected_order_ids = [order.pk for order in data.get("orders", [])]
+        return data
+
+
+class SalesDocumentItemForm(forms.ModelForm):
+    class Meta:
+        model = SalesDocumentItem
+        fields = "__all__"
+        labels = {"sort_order": "⇅"}
+        widgets = {"order_item": OrderLineUnitSelectWidget()}
+
+    def __init__(self, *args, document_context=None, order_ids=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if document_context is not None:
+            self.fields["order_item"].queryset = sales_order_items(document_context, order_ids).filter(
+                Q(remaining_quantity__gt=0) | Q(pk=self.instance.order_item_id)
+            )
+        self.fields["order_item"].label_from_instance = self.label_for_order_line
+        if self.instance.pk:
+            self.fields["order_item"].disabled = True
+        configure_order_line_quantity(self)
+
+    @staticmethod
+    def label_for_order_line(item):
+        remaining = getattr(item, "remaining_quantity", item.quantity)
+        return (
+            f"Заказ №{item.customer_order_id} | Строка №{item.order_position_number} | "
+            f"{item.product} — осталось {remaining.normalize():f} {item.product.unit.symbol}"
+        )
+
+
+class SalesDocumentItemFormSet(SourceOrderFormSetMixin, BaseInlineFormSet):
+    def get_form_kwargs(self, index):
+        kwargs = super().get_form_kwargs(index)
+        context = SalesDocument(pk=self.instance.pk, organization_id=None)
+        for field in ("customer", "organization"):
+            value = self.data.get(field) if self.is_bound else getattr(self.instance, f"{field}_id")
+            try:
+                value = int(value) if value else None
+            except (TypeError, ValueError):
+                value = None
+            setattr(context, f"{field}_id", value)
+        kwargs.update(document_context=context, order_ids=self.selected_order_ids())
+        return kwargs
+
+    def selected_order_ids(self):
+        if self.is_bound:
+            values = self.data.getlist("orders")
+            return [int(value) for value in values if str(value).isdigit()]
+        return list(self.instance.orders.values_list("pk", flat=True)) if self.instance.pk else getattr(self.instance, "_selected_order_ids", [])
+
+    def clean(self):
+        super().clean()
+        self.pending_items = []
+        if any(self.errors) or not self.instance.customer_id or not self.instance.organization_id:
+            return
+        # Admin validates and saves the entire document inside a transaction.
+        # Lock source rows before reading balances so concurrent documents serialize.
+        list(OrderItem.objects.select_for_update().filter(
+            customer_order_id__in=self.selected_order_ids(),
+        ).order_by("pk").values_list("pk", flat=True))
+        available = {item.pk: item for item in sales_order_items(self.instance, self.selected_order_ids())}
+        used = set()
+        for form in self.forms:
+            data = form.cleaned_data
+            if not data or not data.get("order_item"):
+                continue
+            item_id = data["order_item"].pk
+            used.add(item_id)  # Deleted rows must not be added back by autofill.
+            if data.get("DELETE"):
+                continue
+            item = available.get(item_id)
+            if item is None:
+                form.add_error("order_item", _("Строка не соответствует заказу и организации реализации."))
+            elif data["quantity"] > item.remaining_quantity:
+                form.add_error("quantity", _("Доступно к реализации: %(quantity)s.") % {"quantity": item.remaining_quantity})
+        if any(self.errors):
+            return
+        if self.data.get("fill_from_order"):
+            for item in available.values():
+                if item.pk in used or item.remaining_quantity <= 0:
+                    continue
+                row = SalesDocumentItem(
+                    document=self.instance, order_item=item,
+                    quantity=item.remaining_quantity,
+                    sort_order=len(self.forms) + len(self.pending_items),
+                )
+                try:
+                    row.full_clean(exclude=("document",))
+                except forms.ValidationError as error:
+                    raise forms.ValidationError(
+                        _("Не удалось заполнить товар %(product)s: %(error)s"),
+                        params={"product": item.product, "error": "; ".join(error.messages)},
+                    ) from error
+                self.pending_items.append(row)
+        active = [f for f in self.forms if f.cleaned_data and not f.cleaned_data.get("DELETE")]
+        if self.instance.is_applied and not active and not self.pending_items:
+            raise forms.ValidationError(_("Нельзя провести реализацию без позиций."))
+
+    def save_new_objects(self, commit=True):
+        objects = super().save_new_objects(commit=commit)
+        for item in self.pending_items:
+            item.document = self.instance
+            if commit:
+                item.save()
+            objects.append(item)
+        return objects
+
+
+class SalesDocumentItemInline(TabularInline):
+    model = SalesDocumentItem
+    form = SalesDocumentItemForm
+    formset = SalesDocumentItemFormSet
+    fields = ("sort_order", "order_item", "quantity", "line_total")
+    readonly_fields = ("line_total",)
+    extra = 0
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("order_item")
+
+    @admin.display(description=_("Сумма по цене заказа"))
+    def line_total(self, obj):
+        return obj.total_price if obj and obj.pk else "—"
+
+
+
+
+@admin.register(SalesDocument)
+class SalesDocumentAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
+    form = SalesDocumentForm
+    total_field = F("items__quantity") * F("items__order_item__customer_price")
+    product_field = "items__order_item__product"
+    fields = BASE_FIELDS + (
+        "customer", ("delivery_note_number", "delivery_note_date"),
+        "orders", "fill_from_order",
+        ("order_total", "order_quantity", "product_count"), "comment",
+    )
+    readonly_fields = BASE_READONLY + ("order_total", "order_quantity", "product_count")
+    list_display = (
+        "id", "delivery_note_number", "delivery_note_date", "customer",
+        "organization", "order_total", "is_applied",
+    )
+    list_display_links = ("id", "delivery_note_number")
+    list_filter = ("is_applied", "organization", "customer")
+    search_fields = ("delivery_note_number",)
+    inlines = (SalesDocumentItemInline,)
     filter_horizontal = ("orders",)
 
     class Media:
