@@ -663,6 +663,26 @@ class NovaPoshtaArea(models.Model):
         return self.description
 
 
+class NovaPoshtaRegion(models.Model):
+    ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
+    area = models.ForeignKey(
+        NovaPoshtaArea,
+        on_delete=models.PROTECT,
+        related_name="regions",
+        verbose_name=_("Область"),
+    )
+    description = models.CharField(max_length=255, verbose_name=_("Название"))
+    region_type = models.CharField(max_length=100, verbose_name=_("Тип района"))
+
+    class Meta:
+        verbose_name = _("Новая почта: район")
+        verbose_name_plural = _("Новая почта: районы")
+        ordering = ("area__description", "description")
+
+    def __str__(self):
+        return self.description
+
+
 class DeliveryMethod(BaseModel):
     class Kind(models.TextChoices):
         CARRIER = "carrier", _("Перевозчик")
