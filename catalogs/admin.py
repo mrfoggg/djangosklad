@@ -44,6 +44,21 @@ class NovaPoshtaAreaAdmin(ModelAdmin):
     search_fields = ("description", "ref")
     actions_list = ("update_areas",)
 
+    def get_search_results(self, request, queryset, search_term):
+        results, may_have_duplicates = super().get_search_results(
+            request, queryset, search_term
+        )
+        if search_term:
+            # SQLite LIKE не поддерживает регистронезависимый поиск кириллицы.
+            # Справочник областей мал, поэтому сравниваем названия через casefold.
+            term = search_term.strip().casefold()
+            matching_refs = [
+                ref for ref, description in queryset.values_list("ref", "description")
+                if term in description.casefold()
+            ]
+            results = results | queryset.filter(ref__in=matching_refs)
+        return results, may_have_duplicates
+
     @action(
         description=_("Обновить области"),
         icon="sync",

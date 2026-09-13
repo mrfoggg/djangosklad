@@ -58,6 +58,23 @@ class NovaPoshtaAreaTests(TestCase):
 
 @override_settings(LANGUAGE_CODE="ru")
 class NovaPoshtaAreaAdminTests(TestCase):
+    def test_autocomplete_search_ignores_cyrillic_case(self):
+        area = NovaPoshtaArea.objects.create(
+            ref=UUID("dcaae303-4b33-11e4-ab6d-005056801329"),
+            description="Харківська",
+        )
+        for term in ("ха", "Ха", "ХА", "харків", str(area.ref)):
+            with self.subTest(term=term):
+                response = self.client.get(reverse("admin:autocomplete"), {
+                    "app_label": "catalogs", "model_name": "novaposhtaregion",
+                    "field_name": "area", "term": term,
+                })
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(
+                    {"id": str(area.ref), "text": "Харківська"},
+                    response.json()["results"],
+                )
+
     def setUp(self):
         self.user = get_user_model().objects.create_user('staff', is_staff=True)
         self.user.user_permissions.set(Permission.objects.filter(
