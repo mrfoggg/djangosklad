@@ -926,6 +926,13 @@ class PaymentOutItem(models.Model):
 
 
 class GoodsReceipt(BaseDocumentModel):
+    supplier_delivery_note_number = models.CharField(
+        _("Номер расходной накладной поставщика"), max_length=100, blank=True,
+    )
+    supplier_delivery_note_date = models.DateField(
+        _("Дата расходной накладной поставщика"), blank=True, null=True,
+    )
+
     purchase_order = models.ForeignKey(
         PurchaseOrder, on_delete=models.PROTECT, related_name="goods_receipts",
         verbose_name=_("Заказ поставщику"),

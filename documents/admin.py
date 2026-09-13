@@ -1557,10 +1557,12 @@ class GoodsReceiptAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     form = GoodsReceiptForm
     total_field = F("items__quantity") * F("items__order_item__purchase_price")
     product_field = "items__order_item__product"
-    list_display = ("id", "purchase_order", "supplier", "organization", "warehouse", "order_total", "is_applied", "created")
+    list_display = ("id", "supplier_delivery_note_number", "supplier_delivery_note_date", "purchase_order", "supplier", "organization", "warehouse", "order_total", "is_applied", "created")
     list_display_links = ("id", "purchase_order")
+    search_fields = ("supplier_delivery_note_number",)
     list_filter = ("is_applied", "organization", "warehouse", "purchase_order__supplier")
     fields = BASE_FIELDS + (
+        ("supplier_delivery_note_number", "supplier_delivery_note_date"),
         "purchase_order", "supplier", "warehouse", "fill_from_order",
         ("order_total", "order_quantity", "product_count"), "comment",
     )
