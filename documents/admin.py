@@ -37,6 +37,7 @@ from .models import (
     PaymentOrderIn,
     PaymentOrderOut,
     PaymentOutItem,
+    PaymentInItem,
     PurchaseInvoice,
     PurchaseOrder,
     RetailPriceItem,
@@ -50,13 +51,15 @@ from .models import (
 from .receipts import receipt_order_items
 from .invoices import invoice_order_items, with_invoice_balance
 from .order_lines import with_order_position
-from .order_summary import supplier_order_summary
+from .order_summary import supplier_order_summary, customer_order_summary
 from .source_order_admin import (SourceOrderAdminMixin, SourceOrderFormSetMixin,
                                  SourceOrderOrganizationForm, source_order_organizations)
 
 
 BASE_READONLY_DATES = ("created", "updated")
 BASE_READONLY = ("id",) + BASE_READONLY_DATES
+from .sales_invoices import sales_invoice_order_items, with_sales_invoice_balance
+
 BASE_FIELDS = (
     # (BASE_READONLY),
     BASE_READONLY,
@@ -359,19 +362,60 @@ class CustomeOrderItemInline(TabularInline):
     extra = 0
 
     fields = (
+        "position_number",
         "sort_order_customer",
         "product",
         "customer_price",
         "purchase_price",
         "rrp",
-        "quantity",
+        "quantity", "received_quantity", "remaining_quantity",
         "customer_total_price",
-        "purchase_order",
+        "organization", "purchase_order", "get_invoice_link",
         "warehouse",
         "payment_method_customer",
     )
-    ordering = ("sort_order_customer",)
-    readonly_fields = ("customer_total_price",)
+    ordering = ("sort_order_customer", "pk")
+    readonly_fields = ("customer_total_price", "position_number", "received_quantity", "remaining_quantity", "get_invoice_link")
+
+
+    @admin.display(description=_("№"))
+    def position_number(self, obj):
+        return format_html('<span class="purchase-position-number">{}</span>', getattr(obj, "calculated_position_number", "—"))
+
+    def get_queryset(self, request):
+        received = SalesDocumentItem.objects.filter(
+            order_item_id=OuterRef("pk"), document__is_applied=True,
+        ).order_by().values("order_item_id").annotate(total=Sum("quantity"))
+        return super().get_queryset(request).annotate(
+            calculated_position_number=Window(
+                expression=RowNumber(), partition_by=[F("customer_order_id")],
+                order_by=[F("sort_order_customer").asc(), F("pk").asc()],
+            ),
+            calculated_received=Coalesce(
+                Subquery(received.values("total")[:1]), Value(Decimal("0")),
+                output_field=DecimalField(max_digits=14, decimal_places=6),
+            ),
+        )
+
+    @admin.display(description=_("Реализовано"))
+    def received_quantity(self, obj):
+        return getattr(obj, "calculated_received", Decimal("0")) if obj and obj.pk else "—"
+
+    @admin.display(description=_("Осталось реализовать"))
+    def remaining_quantity(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        return obj.quantity - getattr(obj, "calculated_received", Decimal("0"))
+
+    @admin.display(description=_("Счета"))
+    def get_invoice_link(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        return format_html_join(
+            ", ", '<a href="{}">Счёт №{}</a>',
+            ((reverse("admin:documents_salesinvoice_change", args=[item.invoice_id]), item.invoice_id)
+             for item in obj.sales_invoice_items.all()),
+        ) or "—"
 
 
 class OrderLineUnitSelectWidget(UnfoldAdminSelectWidget):
@@ -389,7 +433,10 @@ class OrderLineUnitSelectWidget(UnfoldAdminSelectWidget):
 
 def configure_order_line_quantity(form):
     field = form.fields["order_item"]
-    field.queryset = with_order_position(field.queryset).select_related("product__unit", "purchase_order")
+    customer = form._meta.model in (SalesInvoiceItem, SalesDocumentItem)
+    field.queryset = with_order_position(field.queryset, customer=customer).select_related(
+        "product__unit", "customer_order" if customer else "purchase_order",
+    )
     item = None
     if form.instance.order_item_id:
         item = field.queryset.filter(pk=form.instance.order_item_id).first()
@@ -566,40 +613,123 @@ class SalesInvoiceItemInlineForm(forms.ModelForm):
     class Meta:
         model = SalesInvoiceItem
         fields = "__all__"
+        widgets = {"order_item": OrderLineUnitSelectWidget()}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, invoice_context=None, order_ids=(), **kwargs):
         super().__init__(*args, **kwargs)
-        if "order_item" not in self.fields:
+        field = self.fields.get("order_item")
+        if field:
+            field.label_from_instance = self.label_for_purchase
+            if invoice_context is not None:
+                available = sales_invoice_order_items(invoice_context, order_ids)
+                # Existing links stay visible; the formset validates their context.
+                field.queryset = with_sales_invoice_balance(
+                    OrderItem.objects.filter(
+                        Q(pk__in=available.filter(invoice_remaining__gt=0).values("pk"))
+                        | Q(pk=self.instance.order_item_id)
+                    ).select_related("product__unit", "customer_order"), invoice_context.pk,
+                )
+            elif not self.instance.pk:
+                field.queryset = with_sales_invoice_balance(field.queryset).filter(invoice_remaining__gt=0)
+            if self.instance.pk:
+                field.disabled = True
+        self.fields["quantity"].help_text = _("Пустое поле — оставшееся количество по заказу.")
+        configure_order_line_quantity(self)
+
+    def clean(self):
+        data = super().clean()
+        item = data.get("order_item")
+        if item and data.get("quantity") is None and "quantity" not in self.errors:
+            data["quantity"] = with_sales_invoice_balance(
+                OrderItem.objects.filter(pk=item.pk), self.instance.invoice_id,
+            ).get().invoice_remaining
+            if data["quantity"] <= 0:
+                self.add_error("quantity", _("По строке заказа не осталось количества для счёта."))
+        return data
+
+    def label_for_purchase(self, obj):
+        number = obj.customer_order_id or "—"
+        remaining = getattr(obj, "invoice_remaining", obj.quantity)
+        return f"Заказ №{number} | Строка №{obj.order_position_number} | {obj.product.name} | Осталось {remaining:f} {obj.product.unit.symbol}"
+
+
+class SalesInvoiceItemFormSet(SourceOrderFormSetMixin, BaseInlineFormSet):
+    def get_form_kwargs(self, index):
+        kwargs = super().get_form_kwargs(index)
+        context = SalesInvoice(pk=self.instance.pk, organization_id=None)
+        for field in ("customer", "organization"):
+            value = self.data.get(field) if self.is_bound else getattr(self.instance, f"{field}_id")
+            try:
+                value = int(value) if value else None
+            except (ValueError, TypeError):
+                value = None
+            setattr(context, f"{field}_id", value)
+        # Ignore invalid customers here: the parent form reports the error.
+        if context.customer_id and not context._meta.get_field("customer").remote_field.model.objects.filter(pk=context.customer_id).exists():
+            context.customer_id = None
+        kwargs.update(invoice_context=context, order_ids=self.selected_order_ids())
+        return kwargs
+
+    def selected_order_ids(self):
+        if self.is_bound:
+            return [int(value) for value in self.data.getlist("orders") if value.isdigit()]
+        return list(self.instance.orders.values_list("pk", flat=True)) if self.instance.pk else getattr(self.instance, "_selected_order_ids", [])
+
+    def clean(self):
+        super().clean()
+        self.pending_items = []
+        if any(self.errors) or not self.instance.customer_id or not self.instance.organization_id:
             return
+        ids = self.selected_order_ids()
+        list(OrderItem.objects.select_for_update().filter(customer_order_id__in=ids).order_by("pk").values_list("pk", flat=True))
+        available = {item.pk: item for item in sales_invoice_order_items(self.instance, ids)}
+        used = set()
+        for form in self.forms:
+            data = form.cleaned_data
+            if not data or not data.get("order_item"):
+                continue
+            pk = data["order_item"].pk
+            used.add(pk)
+            if data.get("DELETE"):
+                continue
+            item = available.get(pk)
+            if item is None:
+                form.add_error("order_item", _("Строка не соответствует выбранным заказам, покупателю или организации счёта."))
+            elif data["quantity"] > item.invoice_remaining:
+                form.add_error("quantity", _("Доступно для счёта: %(quantity)s.") % {"quantity": item.invoice_remaining})
+        if any(self.errors):
+            return
+        if self.data.get("fill_from_orders"):
+            for item in available.values():
+                if item.pk in used or item.invoice_remaining <= 0:
+                    continue
+                row = SalesInvoiceItem(invoice=self.instance, order_item=item,
+                                  quantity=item.invoice_remaining, sort_order=item.sort_order_customer)
+                try:
+                    row.full_clean(exclude=("invoice",))
+                except forms.ValidationError as error:
+                    raise forms.ValidationError(
+                        _("Не удалось заполнить товар %(product)s: %(error)s"),
+                        params={"product": item.product, "error": "; ".join(error.messages)},
+                    ) from error
+                self.pending_items.append(row)
 
-        order_item_field = self.fields["order_item"]
-        order_item_field.label_from_instance = self.label_for_customer
-        if self.instance and self.instance.pk:
-            order_item_field.disabled = True
-            order_item_field.queryset = order_item_field.queryset.filter(
-                pk=self.instance.order_item_id
-            )
-        else:
-            order_item_field.queryset = order_item_field.queryset.filter(
-                sales_invoice_item__isnull=True
-            )
-
-    def label_for_customer(self, obj):
-        order_no = obj.customer_order.id if obj.customer_order else "???"
-        order_dt = obj.customer_order.dt_applied if obj.customer_order else "???"
-        return (
-            f"№{order_no} от {order_dt} | {obj.product.name} "
-            f"({obj.quantity} {obj.product.unit.symbol})"
-        )
+    def save_new_objects(self, commit=True):
+        objects = super().save_new_objects(commit=commit)
+        for item in self.pending_items:
+            item.invoice = self.instance
+            if commit:
+                item.save()
+            objects.append(item)
+        return objects
 
 
 class SalesInvoiceItemInline(TabularInline):
     model = SalesInvoiceItem
     form = SalesInvoiceItemInlineForm
+    formset = SalesInvoiceItemFormSet
     extra = 0
     tab = True
-    fields = ("sort_order", "get_order_link", "order_item", "get_price", "get_total")
-    readonly_fields = ("get_order_link", "get_price", "get_total")
 
     def get_formset(self, request, obj=None, **kwargs):
         formset = super().get_formset(request, obj, **kwargs)
@@ -607,48 +737,25 @@ class SalesInvoiceItemInline(TabularInline):
             formset.form.base_fields["sort_order"].label = "⇅"
         return formset
 
-    def formfield_for_foreignkey(self, db_field, request, **kwargs):
-        if db_field.name == "order_item":
-            object_id = request.resolver_match.kwargs.get("object_id")
-            invoice = (
-                SalesInvoice.objects.filter(pk=object_id).first()
-                if object_id
-                else None
-            )
-            if invoice:
-                selected_order_ids = invoice.orders.values_list("id", flat=True)
-                item_filters = Q(
-                    customer_order_id__in=selected_order_ids,
-                    payment_method_customer=(
-                        OrderItem.CustomerPaymentMethod.PREPAID
-                    ),
-                )
-                if invoice.organization:
-                    item_filters &= Q(organization=invoice.organization)
-                availability_filter = Q(sales_invoice_item__isnull=True) | Q(
-                    sales_invoice_item__invoice=invoice
-                )
-                kwargs["queryset"] = OrderItem.objects.filter(
-                    item_filters, availability_filter
-                ).distinct()
-            else:
-                kwargs["queryset"] = OrderItem.objects.none()
-
-        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+    # Добавляем get_order_link в список полей
+    fields = ("sort_order", "get_order_link", "order_item", "quantity", "get_price", "get_total")
+    readonly_fields = ("get_order_link", "get_price", "get_total")
 
     @admin.display(description=_("Заказ"))
     def get_order_link(self, obj):
+        # Проверяем наличие связи, чтобы не упасть с ошибкой
         if obj.order_item and obj.order_item.customer_order:
             order = obj.order_item.customer_order
+
+            # Генерируем URL к странице редактирования заказа
+            # documents — это имя твоего приложения (app_name)
             url = reverse("admin:documents_customerorder_change", args=[order.id])
+
             return format_html(
-                '<a href="{}" target="_blank" style="font-weight: 600; '
-                'color: #3b82f6; text-decoration: underline;">{}/{}</a>',
+                '<a href="{}" target="_blank" style="font-weight: 600; color: #3b82f6; text-decoration: underline;">{}/{}</a>',
                 url,
                 order.id,
-                order.dt_applied.strftime("%Y-%m-%d")
-                if order.dt_applied
-                else "???",
+                order.dt_applied.strftime("%Y-%m-%d") if order.dt_applied else "???",
             )
         return "-"
 
@@ -658,7 +765,7 @@ class SalesInvoiceItemInline(TabularInline):
 
     @admin.display(description=_("Сумма"))
     def get_total(self, obj):
-        return obj.order_item.customer_total_price if obj.order_item else "-"
+        return obj.total_price if obj and obj.pk else "—"
 
 
 class SupplierPriceListForm(DocumentForm):
@@ -1258,11 +1365,16 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_price_fetch.js?v=2",
             "documents/js/admin_quantity_step.js",
-            "documents/js/admin_sortable_init.js?v=2",
+            "documents/js/admin_sortable_init.js?v=3",
         ]
 
 
 class CustomerOrderForm(DocumentForm):
+    def clean(self):
+        data = super().clean()
+        self.instance._force_current_date = data.get("force_current_date", False)
+        return data
+
     class Meta:
         model = CustomerOrder
         fields = "__all__"
@@ -1292,15 +1404,148 @@ class CustomerOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     readonly_fields = BASE_READONLY + (
         "order_total",
         "order_quantity",
-        "product_count",
+        "product_count", "linked_invoices", "linked_sales", "linked_purchase_orders", "delivery_summary", "payment_summary",
     )
     fields = BASE_FIELDS + (
         "customer",
         "retail_store",
         "status",
         ("order_total", "order_quantity", "product_count"),
+        "linked_invoices", "linked_sales", "linked_purchase_orders", "delivery_summary", "payment_summary", "comment",
     )
     inlines = [CustomeOrderItemInline]
+
+    @admin.display(description=_("Связанные заказы поставщикам"))
+    def linked_purchase_orders(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        orders = PurchaseOrder.objects.filter(
+            pk__in=obj.items.values("purchase_order_id"),
+        ).select_related("supplier").prefetch_related("items").order_by("pk")
+        entries = []
+        for order in orders:
+            items = list(order.items.all())
+            totals = {}
+            for price_field in ("purchase_price", "customer_price"):
+                totals[price_field] = None if any(getattr(item, price_field) is None for item in items) else sum(
+                    (item.quantity * getattr(item, price_field) for item in items), Decimal("0"),
+                )
+            quantity = sum((item.quantity for item in items), Decimal("0"))
+            quantity_places = max(0, -quantity.normalize().as_tuple().exponent)
+            product_count = len({item.product_id for item in items})
+            entries.append((
+                reverse("admin:documents_purchaseorder_change", args=[order.pk]),
+                f"№{order.pk}", order.supplier,
+                f"{localdate(order.created):%d.%m.%Y}",
+                _("Проведён") if order.is_applied else _("Черновик"),
+                number_format(quantity, decimal_pos=quantity_places, use_l10n=True), product_count,
+                self._money(totals["purchase_price"]), self._money(totals["customer_price"]),
+            ))
+        return format_html_join(
+            "", '<div class="mb-3"><div><a href="{}">{}</a> · {} · Создан: {} · {}</div>'
+            '<div>Количество товаров: {} · Наименований: {}</div>'
+            '<div>Сумма закупки: {} · Сумма продажи: {}</div></div>', entries,
+        ) or "—"
+
+    @staticmethod
+    def _summary(obj):
+        if not hasattr(obj, "_customer_order_summary"):
+            obj._customer_order_summary = customer_order_summary(obj)
+        return obj._customer_order_summary
+
+    _money = staticmethod(PurchaseOrderAdmin._money)
+    payment_summary = PurchaseOrderAdmin.payment_summary
+
+    def _document_links(self, documents, model_name, number_field, date_field):
+        entries = []
+        for document in documents:
+            number = getattr(document, number_field, None) or "—"
+            date = getattr(document, date_field, None)
+            if date:
+                date_label = _("Дата накладной: %(date)s") % {"date": f"{date:%d.%m.%Y}"}
+            elif document.is_applied and document.dt_applied:
+                date_label = _("Проведён: %(date)s") % {"date": f"{localdate(document.dt_applied):%d.%m.%Y}"}
+            else:
+                date_label = _("Создан: %(date)s") % {"date": f"{localdate(document.created):%d.%m.%Y}"}
+            label = f"№{document.pk}" + (f" · Накладная: {number}" if number_field else "")
+            if date or not (document.is_applied and document.dt_applied):
+                status = _("Проведён") if document.is_applied else _("Черновик")
+                date_label = f"{date_label} · {status}"
+            details = _("Сумма документа: %(amount)s") % {"amount": self._money(document.summary_total)}
+            if model_name == "salesinvoice":
+                paid = document.summary_paid
+                total = document.summary_total
+                if total is not None and paid == total:
+                    payment_status = _("Оплачен")
+                else:
+                    payment_status = _("Оплачено: %(amount)s") % {"amount": self._money(paid)}
+                    if total is None:
+                        payment_status += _(" · Остаток не определён: не заполнены цены")
+                    elif paid < total:
+                        payment_status += _(" · Не оплачено: %(amount)s") % {"amount": self._money(total - paid)}
+                    else:
+                        payment_status += _(" · Переплата: %(amount)s") % {"amount": self._money(paid - total)}
+                details += f" · {payment_status}"
+            entries.append((reverse(f"admin:documents_{model_name}_change", args=[document.pk]),
+                            label, document.customer, date_label, details))
+        return format_html_join(
+            "", '<div class="mb-3"><div><a href="{}">{}</a> · {} · {}</div><div>{}</div></div>', entries,
+        ) or "—"
+
+    @admin.display(description=_("Связанные счета"))
+    def linked_invoices(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        return self._document_links(self._summary(obj)["invoices"], "salesinvoice", "", "")
+
+    @admin.display(description=_("Связанные реализации"))
+    def linked_sales(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        return self._document_links(self._summary(obj)["receipts"], "salesdocument",
+                                    "delivery_note_number", "delivery_note_date")
+
+    @admin.display(description=_("Итоги реализации"))
+    def delivery_summary(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        summary = self._summary(obj)
+        rows = []
+        for kind, label in (("ordered", _("Заказано")), ("received", _("Реализовано")), ("pending", _("Осталось реализовать"))):
+            quantities = "; ".join(
+                f'{number_format(group[kind], decimal_pos=group["places"], use_l10n=True)} {group["symbol"]}'
+                for group in summary["quantities"]
+            ) or "0"
+            rows.append((label, quantities, self._money(summary["amounts"][kind])))
+        return format_html(
+            '{}<div>Учитываются только проведённые реализации.</div>',
+            format_html_join("", '<div><strong>{}:</strong> {} · {}</div>', rows),
+        )
+
+    _can_create_from_order = PurchaseOrderAdmin._can_create_from_order
+    _create_from_order = PurchaseOrderAdmin._create_from_order
+    source_organization_dialog = PurchaseOrderAdmin.source_organization_dialog
+    actions_detail = [{
+        "title": _("Создать на основании"), "icon": "add_circle",
+        "items": ["create_customer_invoice", "create_sales_document"],
+    }]
+
+    def has_create_customer_invoice_permission(self, request, object_id=None):
+        return self._can_create_from_order(request, object_id, SalesInvoice)
+
+    def has_create_sales_document_permission(self, request, object_id=None):
+        return self._can_create_from_order(request, object_id, SalesDocument)
+
+    @action(description=_("Счёт покупателю"), permissions=["create_customer_invoice"])
+    def create_customer_invoice(self, request, object_id):
+        return self._create_from_order(request, object_id, SalesInvoice)
+
+    @action(description=_("Реализация товаров и услуг"), permissions=["create_sales_document"])
+    def create_sales_document(self, request, object_id):
+        return self._create_from_order(request, object_id, SalesDocument)
+
+    create_customer_invoice.dialog = source_organization_dialog
+    create_sales_document.dialog = source_organization_dialog
 
     class Media:
         js = [
@@ -1308,7 +1553,7 @@ class CustomerOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_price_fetch.js?v=2",
             "documents/js/admin_quantity_step.js",
-            "documents/js/admin_sortable_init.js?v=2",
+            "documents/js/admin_sortable_init.js?v=3",
         ]
 
 
@@ -1372,7 +1617,7 @@ class PurchaseInvoiceAdmin(SourceOrderAdminMixin, OrderTotalsAdminMixin, BaseDoc
     class Media:
         js = [
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
-            "documents/js/admin_sortable_init.js?v=2",
+            "documents/js/admin_sortable_init.js?v=3",
             "documents/js/admin_quantity_step.js",
         ]
 
@@ -1410,12 +1655,11 @@ class PurchaseInvoiceAdmin(SourceOrderAdminMixin, OrderTotalsAdminMixin, BaseDoc
 
 class SalesInvoiceForm(DocumentForm):
     fill_from_orders = forms.BooleanField(
-        label=_("Заполнить по выбранным заказам"),
+        label=_("Заполнить остатками по заказам"),
         required=False,
         initial=False,
         help_text=_(
-            "Автоматически добавит доступные позиции выбранных заказов "
-            "с видом оплаты «Оплата по счету»."
+            "Добавит отсутствующие строки с оставшимся количеством из выбранных заказов. Учитываются только проведённые счета."
         ),
     )
 
@@ -1425,10 +1669,12 @@ class SalesInvoiceForm(DocumentForm):
 
 
 @admin.register(SalesInvoice)
-class SalesInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
+class SalesInvoiceAdmin(SourceOrderAdminMixin, OrderTotalsAdminMixin, BaseDocumentAdmin):
+    source_order_model = CustomerOrder
+    source_party_field = "customer"
     form = SalesInvoiceForm
-    total_field = "items__order_item__customer_total_price"
-    quantity_field = "items__order_item__quantity"
+    total_field = F("items__quantity") * F("items__order_item__customer_price")
+    quantity_field = "items__quantity"
     product_field = "items__order_item__product"
     list_display = (
         "id",
@@ -1472,71 +1718,236 @@ class SalesInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
                     organization=invoice.organization
                 )
             else:
-                kwargs["queryset"] = OurBankAccount.objects.none()
+                kwargs["queryset"] = OurBankAccount.objects.all()
 
         return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def formfield_for_manytomany(self, db_field, request, **kwargs):
         if db_field.name == "orders":
-            object_id = request.resolver_match.kwargs.get("object_id")
-            invoice = self.get_object(request, object_id) if object_id else None
-            if invoice and invoice.customer_id:
-                customer_query = Q(customer=invoice.customer)
-                if invoice.customer.parent_holding_id:
-                    customer_query |= Q(customer=invoice.customer.parent_holding)
-
-                item_filters = Q(
-                    items__payment_method_customer=(
-                        OrderItem.CustomerPaymentMethod.PREPAID
-                    )
-                )
-                if invoice.organization:
-                    item_filters &= Q(items__organization=invoice.organization)
-
-                availability_filter = Q(
-                    items__sales_invoice_item__isnull=True
-                ) | Q(items__sales_invoice_item__invoice=invoice)
-                kwargs["queryset"] = CustomerOrder.objects.filter(
-                    customer_query,
-                    item_filters,
-                    availability_filter,
-                    is_applied=True,
-                ).distinct()
-            else:
-                kwargs["queryset"] = CustomerOrder.objects.none()
-
+            kwargs["queryset"] = CustomerOrder.objects.filter(is_applied=True, to_remove=False)
         return super().formfield_for_manytomany(db_field, request, **kwargs)
 
-    def save_related(self, request, form, formsets, change):
-        super().save_related(request, form, formsets, change)
-        if form.cleaned_data.get("fill_from_orders"):
-            self._fill_items_from_orders(request, form.instance)
+    class Media:
+        js = [
+            "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
+            "documents/js/admin_sortable_init.js?v=3",
+            "documents/js/admin_quantity_step.js",
+        ]
 
-    def _fill_items_from_orders(self, request, obj):
-        filters = Q(
-            customer_order__in=obj.orders.all(),
-            payment_method_customer=OrderItem.CustomerPaymentMethod.PREPAID,
-            sales_invoice_item__isnull=True,
+
+class IncomingPaymentInvoiceSelectWidget(UnfoldAdminSelectWidget):
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(
+            name, value, label, selected, index, subindex=subindex, attrs=attrs
         )
-        if obj.organization:
-            filters &= Q(organization=obj.organization)
+        invoice = getattr(value, "instance", None)
+        if invoice is not None:
+            option["attrs"]["data-supplier-id"] = invoice.customer_id
+            option["attrs"]["data-organization-id"] = invoice.organization_id
+        return option
 
-        created_count = 0
-        for order_item in OrderItem.objects.filter(filters):
-            _, created = SalesInvoiceItem.objects.get_or_create(
-                invoice=obj,
-                order_item=order_item,
-                defaults={"sort_order": order_item.sort_order_customer},
-            )
-            if created:
-                created_count += 1
 
-        if created_count:
-            self.message_user(request, f"Добавлено позиций: {created_count}")
-        else:
-            self.message_user(
-                request, "Новых позиций для добавления не найдено", level="WARNING"
+class PaymentInItemInlineForm(forms.ModelForm):
+    def __init__(self, *args, payment=None, **kwargs):
+        self.payment = payment
+        super().__init__(*args, **kwargs)
+        invoice_field = self.fields.get("invoice")
+        if invoice_field:
+            invoice_field.queryset = invoice_field.queryset.annotate(
+                calculated_total=Coalesce(
+                    Sum(F("items__quantity") * F("items__order_item__customer_price")),
+                    Value(Decimal("0.00")),
+                    output_field=DecimalField(max_digits=20, decimal_places=2),
+                )
             )
+            paid = PaymentInItem.objects.filter(
+                invoice_id=OuterRef("pk"), payment__is_applied=True
+            )
+            if payment is not None and payment.pk:
+                paid = paid.exclude(payment_id=payment.pk)
+            paid = paid.order_by().values("invoice_id").annotate(total=Sum("amount"))
+            invoice_field.queryset = invoice_field.queryset.annotate(
+                calculated_paid=Coalesce(
+                    Subquery(paid.values("total")[:1]), Value(Decimal("0.00")),
+                    output_field=DecimalField(max_digits=20, decimal_places=2),
+                )
+            ).filter(
+                Q(calculated_total__gt=F("calculated_paid"))
+                | Q(pk=self.instance.invoice_id)
+            )
+            invoice_field.label_from_instance = self.invoice_label
+
+    def clean_invoice(self):
+        invoice = self.cleaned_data["invoice"]
+        if self.payment is not None and (
+            invoice.customer_id != self.payment.contractor_id
+            or invoice.organization_id != self.payment.organization_id
+        ):
+            raise forms.ValidationError(
+                _("Счет должен принадлежать контрагенту и организации платежа.")
+            )
+        return invoice
+
+    @staticmethod
+    def invoice_label(invoice):
+        total = number_format(invoice.calculated_total, decimal_pos=2, use_l10n=True)
+        return _("%(invoice)s — %(total)s грн") % {
+            "invoice": invoice,
+            "total": total,
+        }
+
+    class Meta:
+        model = PaymentInItem
+        fields = "__all__"
+        widgets = {"invoice": IncomingPaymentInvoiceSelectWidget()}
+        labels = {"sort_order": "⇅"}
+
+
+class PaymentInItemInlineFormSet(BaseInlineFormSet):
+    # Amounts, including zero, have already been resolved by clean().
+    def save_new(self, form, commit=True):
+        obj = super().save_new(form, commit=False)
+        if commit:
+            obj.save(resolve_amount=False)
+        return obj
+
+    def save_existing(self, form, instance, commit=True):
+        obj = super().save_existing(form, instance, commit=False)
+        if commit:
+            obj.save(resolve_amount=False)
+        return obj
+
+    def get_form_kwargs(self, index):
+        kwargs = super().get_form_kwargs(index)
+        # The parent form is validated after formset construction in Django admin.
+        payment = PaymentOrderIn(pk=self.instance.pk, organization_id=None)
+        for field in ("contractor", "organization"):
+            value = self.data.get(field) if self.is_bound else getattr(
+                self.instance, f"{field}_id", None
+            )
+            try:
+                value = int(value) if value else None
+            except (TypeError, ValueError):
+                value = None
+            setattr(payment, f"{field}_id", value)
+        kwargs["payment"] = payment
+        return kwargs
+
+    def clean(self):
+        super().clean()
+        if any(self.errors):
+            return
+        allocated = Decimal("0.00")
+        balances = {}
+        for form in self.forms:
+            data = form.cleaned_data
+            if not data or data.get("DELETE"):
+                continue
+            invoice = data.get("invoice")
+            if invoice is None:
+                continue
+            if (
+                invoice.customer_id != self.instance.contractor_id
+                or invoice.organization_id != self.instance.organization_id
+            ):
+                form.add_error("invoice", _("Счет должен принадлежать контрагенту и организации платежа."))
+                continue
+            amount = data.get("amount")
+            if amount is not None and amount < 0:
+                form.add_error("amount", _("Сумма оплаты не может быть отрицательной."))
+                continue
+            if invoice.pk not in balances:
+                total = invoice.items.aggregate(
+                    total=Sum(F("quantity") * F("order_item__customer_price"))
+                )["total"] or Decimal("0.00")
+                paid = PaymentInItem.objects.filter(
+                    invoice=invoice, payment__is_applied=True
+                )
+                if self.instance.pk:
+                    paid = paid.exclude(payment_id=self.instance.pk)
+                paid_total = paid.aggregate(total=Sum("amount"))["total"]
+                balances[invoice.pk] = total - (paid_total or Decimal("0.00"))
+            if amount is None or amount == 0:
+                amount = max(balances[invoice.pk], Decimal("0.00"))
+            balances[invoice.pk] -= amount
+            data["amount"] = amount
+            form.instance.amount = amount
+            allocated += amount
+        if self.instance.amount is not None and allocated > self.instance.amount:
+            raise forms.ValidationError(
+                _("Распределено по счетам %(allocated)s грн — больше суммы платежа %(amount)s грн."),
+                params={"allocated": allocated, "amount": self.instance.amount},
+            )
+
+
+class PaymentInItemInline(TabularInline):
+    model = PaymentInItem
+    form = PaymentInItemInlineForm
+    formset = PaymentInItemInlineFormSet
+    fields = ("sort_order", "invoice", "amount", "payment_status")
+    ordering = ("sort_order", "pk")
+    extra = 1
+    readonly_fields = ("payment_status",)
+    verbose_name = _("Оплачиваемый счет")
+    verbose_name_plural = _("Распределение оплаты по счетам")
+
+    def get_queryset(self, request):
+        decimal_field = DecimalField(max_digits=20, decimal_places=2)
+        invoice_total = (
+            SalesInvoiceItem.objects.filter(invoice_id=OuterRef("invoice_id"))
+            .values("invoice_id")
+            .annotate(total=Sum(F("quantity") * F("order_item__customer_price")))
+            .values("total")[:1]
+        )
+        paid_total = (
+            PaymentInItem.objects.filter(
+                invoice_id=OuterRef("invoice_id"),
+                payment__is_applied=True,
+            )
+            .values("invoice_id")
+            .annotate(total=Sum("amount"))
+            .values("total")[:1]
+        )
+        return super().get_queryset(request).select_related("payment").annotate(
+            calculated_invoice_total=Coalesce(
+                Subquery(invoice_total, output_field=decimal_field),
+                Value(Decimal("0.00")),
+                output_field=decimal_field,
+            ),
+            calculated_paid_total=Coalesce(
+                Subquery(paid_total, output_field=decimal_field),
+                Value(Decimal("0.00")),
+                output_field=decimal_field,
+            ),
+        )
+
+    @admin.display(description=_("Состояние оплаты"))
+    def payment_status(self, obj):
+        if not obj or not obj.pk or not obj.invoice_id:
+            return "—"
+
+        invoice_total = getattr(obj, "calculated_invoice_total", Decimal("0.00"))
+        paid_total = getattr(obj, "calculated_paid_total", Decimal("0.00"))
+        if not obj.payment.is_applied:
+            paid_total += obj.amount or Decimal("0.00")
+
+        difference = paid_total - invoice_total
+        if difference < 0:
+            amount = number_format(-difference, decimal_pos=2, use_l10n=True)
+            return format_html(
+                '<span class="text-orange-600 dark:text-orange-400">{}</span>',
+                _("Недоплата: %(amount)s грн") % {"amount": amount},
+            )
+        if difference > 0:
+            amount = number_format(difference, decimal_pos=2, use_l10n=True)
+            return format_html(
+                '<span class="text-red-600 dark:text-red-400">{}</span>',
+                _("Переплата: %(amount)s грн") % {"amount": amount},
+            )
+        return format_html(
+            '<span class="text-green-600 dark:text-green-400">{}</span>',
+            _("Оплачено"),
+        )
 
 
 class PaymentOrderInForm(PaymentOrderOutForm):
@@ -1549,7 +1960,7 @@ class PaymentOrderInAdmin(BaseDocumentAdmin):
     form = PaymentOrderInForm
     list_display = (
         "id", "payment_number", "contractor", "organization", "category",
-        "amount", "is_applied", "created",
+        "amount", "allocated_amount", "payment_difference", "is_applied", "created",
     )
     list_display_links = ("id", "payment_number")
     list_filter = ("category", "is_applied", "organization")
@@ -1557,15 +1968,54 @@ class PaymentOrderInAdmin(BaseDocumentAdmin):
     fields = BASE_FIELDS[:-1] + (
         "payment_number", ("verification_code", "uetr"), "category",
         ("organization", "our_bank_account"),
-        ("contractor", "contractor_bank_account"), "amount",
+        ("contractor", "contractor_bank_account"), ("amount", "allocated_amount", "payment_difference"),
     )
+    readonly_fields = BASE_READONLY + ("allocated_amount", "payment_difference")
+    inlines = (PaymentInItemInline,)
     conditional_fields = {
         **BaseDocumentAdmin.conditional_fields,
         "our_bank_account": "organization",
     }
 
     class Media:
-        js = ["documents/js/admin_payment_bank_accounts.js"]
+        js = ["https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
+              "documents/js/admin_payment_bank_accounts.js?v=2", "documents/js/admin_sortable_init.js?v=3"]
+
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            calculated_allocated_amount=Coalesce(
+                Sum("paymentinitem__amount"),
+                Value(Decimal("0.00")),
+                output_field=DecimalField(max_digits=20, decimal_places=2),
+            )
+        )
+
+    @admin.display(
+        description=_("Распределено по счетам"),
+        ordering="calculated_allocated_amount",
+    )
+    def allocated_amount(self, obj):
+        amount = getattr(obj, "calculated_allocated_amount", Decimal("0.00"))
+        return number_format(amount, decimal_pos=2, use_l10n=True)
+
+    @admin.display(description=_("Расхождение"))
+    def payment_difference(self, obj):
+        payment_amount = getattr(obj, "amount", None) or Decimal("0.00")
+        allocated_amount = getattr(
+            obj, "calculated_allocated_amount", Decimal("0.00")
+        )
+        difference = payment_amount - allocated_amount
+        formatted_difference = number_format(
+            abs(difference), decimal_pos=2, use_l10n=True
+        )
+
+        if difference > 0:
+            return _("Переплата: %(amount)s грн") % {"amount": formatted_difference}
+        if difference < 0:
+            return _("Недоплата: %(amount)s грн") % {"amount": formatted_difference}
+        return _("Без расхождений")
+
 
 
 @admin.register(PaymentOrderOut)
@@ -1621,8 +2071,8 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
     class Media:
         js = [
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
-            "documents/js/admin_payment_bank_accounts.js",
-            "documents/js/admin_sortable_init.js?v=2",
+            "documents/js/admin_payment_bank_accounts.js?v=2",
+            "documents/js/admin_sortable_init.js?v=3",
         ]
 
     def get_queryset(self, request):
@@ -1826,7 +2276,7 @@ class GoodsReceiptAdmin(SourceOrderAdminMixin, OrderTotalsAdminMixin, BaseDocume
     class Media:
         js = [
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
-            "documents/js/admin_sortable_init.js?v=2",
+            "documents/js/admin_sortable_init.js?v=3",
             "documents/js/admin_quantity_step.js",
         ]
 
@@ -1980,7 +2430,9 @@ class SalesDocumentItemInline(TabularInline):
 
 
 @admin.register(SalesDocument)
-class SalesDocumentAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
+class SalesDocumentAdmin(SourceOrderAdminMixin, OrderTotalsAdminMixin, BaseDocumentAdmin):
+    source_order_model = CustomerOrder
+    source_party_field = "customer"
     form = SalesDocumentForm
     total_field = F("items__quantity") * F("items__order_item__customer_price")
     product_field = "items__order_item__product"
@@ -2003,6 +2455,6 @@ class SalesDocumentAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     class Media:
         js = [
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
-            "documents/js/admin_sortable_init.js?v=2",
+            "documents/js/admin_sortable_init.js?v=3",
             "documents/js/admin_quantity_step.js",
         ]

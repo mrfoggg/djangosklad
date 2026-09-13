@@ -11,7 +11,9 @@ from unfold.widgets import UnfoldAdminSelectWidget
 
 from catalogs.models import Organization
 from .invoices import invoice_order_items
-from .models import GoodsReceipt, PurchaseInvoice, PurchaseOrder
+from .models import GoodsReceipt, PurchaseInvoice, PurchaseOrder, CustomerOrder, SalesInvoice, SalesDocument
+from .sales import sales_order_items
+from .sales_invoices import sales_invoice_order_items
 from .receipts import receipt_order_items
 
 
@@ -44,16 +46,19 @@ class SourceOrderFormSetMixin:
 
 
 class SourceOrderAdminMixin:
+    source_order_model = PurchaseOrder
+    source_party_field = "supplier"
+
     def _source_order(self, request):
         if not request.GET.get("from_order"):
             return None
         if hasattr(request, "_source_order"):
             return request._source_order
         try:
-            order = PurchaseOrder.objects.get(pk=request.GET["from_order"])
-        except (PurchaseOrder.DoesNotExist, ValueError, TypeError):
+            order = self.source_order_model.objects.get(pk=request.GET["from_order"])
+        except (self.source_order_model.DoesNotExist, ValueError, TypeError):
             raise Http404
-        order_admin = self.admin_site._registry[PurchaseOrder]
+        order_admin = self.admin_site._registry[self.source_order_model]
         if not order_admin.has_view_permission(request, order):
             raise PermissionDenied
         if not order.is_applied or order.to_remove:
@@ -84,7 +89,7 @@ class SourceOrderAdminMixin:
             choices = self._source_organizations(order)
             if not choices.exists():
                 self.message_user(request, _("Сначала укажите организацию в заказе или его строках."), messages.WARNING)
-                return HttpResponseRedirect(reverse("admin:documents_purchaseorder_change", args=[order.pk]))
+                return HttpResponseRedirect(reverse(f"admin:documents_{self.source_order_model._meta.model_name}_change", args=[order.pk]))
             class OrganizationForm(forms.Form):
                 organization = forms.ModelChoiceField(
                     queryset=choices, label=_("Организация"), widget=UnfoldAdminSelectWidget,
@@ -99,9 +104,11 @@ class SourceOrderAdminMixin:
         initial = super().get_changeform_initial_data(request)
         order = self._source_order(request)
         if order:
-            initial.update(supplier=order.supplier_id, organization=self._source_organization_id(request, order),
-                           orders=[order.pk], is_applied=False)
-            context = self.model(supplier_id=initial["supplier"], organization_id=initial["organization"])
+            party = self.source_party_field
+            initial.update({party: getattr(order, f"{party}_id"),
+                            "organization": self._source_organization_id(request, order),
+                            "orders": [order.pk], "is_applied": False})
+            context = self.model(**{f"{party}_id": initial[party], "organization_id": initial["organization"]})
             if self.model is GoodsReceipt:
                 warehouses = list(receipt_order_items(context, [order.pk]).filter(
                     remaining_quantity__gt=0,
@@ -114,14 +121,16 @@ class SourceOrderAdminMixin:
         kwargs = super().get_formset_kwargs(request, obj, inline, prefix)
         order = self._source_order(request)
         if order and request.method == "GET" and not obj.pk:
-            obj.supplier_id = order.supplier_id
+            setattr(obj, f"{self.source_party_field}_id", getattr(order, f"{self.source_party_field}_id"))
             obj.organization_id = self._source_organization_id(request, order)
             obj._selected_order_ids = [order.pk]
-            if self.model is PurchaseInvoice:
-                candidates = invoice_order_items(obj, [order.pk]).filter(invoice_remaining__gt=0)
+            if self.model in (PurchaseInvoice, SalesInvoice):
+                fetch_items = invoice_order_items if self.model is PurchaseInvoice else sales_invoice_order_items
+                candidates = fetch_items(obj, [order.pk]).filter(invoice_remaining__gt=0)
                 quantity_field = "invoice_remaining"
             else:
-                candidates = receipt_order_items(obj, [order.pk]).filter(remaining_quantity__gt=0)
+                fetch_items = receipt_order_items if self.model is GoodsReceipt else sales_order_items
+                candidates = fetch_items(obj, [order.pk]).filter(remaining_quantity__gt=0)
                 quantity_field = "remaining_quantity"
             kwargs["preview_rows"] = [
                 {"order_item": item.pk, "quantity": getattr(item, quantity_field), "sort_order": index}

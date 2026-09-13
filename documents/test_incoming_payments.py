@@ -76,6 +76,7 @@ class IncomingPaymentTests(TestCase):
         self.assertEqual(self.client.get(url).status_code, 200)
         response = self.client.post(url, {
             "organization": self.organization.pk, "contractor": self.contractor.pk,
+            "paymentinitem_set-TOTAL_FORMS": "0", "paymentinitem_set-INITIAL_FORMS": "0",
             "payment_number": "BANK-123", "category": "other", "amount": "123.45", "_save": "Save",
         })
         self.assertEqual(response.status_code, 302)

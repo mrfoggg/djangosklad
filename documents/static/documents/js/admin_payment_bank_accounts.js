@@ -102,7 +102,7 @@ if (document.readyState === "loading") {
 function filterPaymentInvoices() {
     const contractorId = document.getElementById("id_contractor")?.value;
     const organizationId = document.getElementById("id_organization")?.value;
-    for (const select of document.querySelectorAll('select[name^="paymentoutitem_set-"][name$="-invoice"]')) {
+    for (const select of document.querySelectorAll('select[name^="paymentoutitem_set-"][name$="-invoice"], select[name^="paymentinitem_set-"][name$="-invoice"]')) {
         for (const option of select.options) {
             const available = !option.value || (
                 Boolean(contractorId) && Boolean(organizationId) &&

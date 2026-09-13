@@ -314,6 +314,26 @@ class CustomerOrder(BaseDocumentModel):
     )
     comment = models.TextField(blank=True, null=True, verbose_name=_("Комментарий"))
 
+    def validate_sales_lock(self):
+        if not self.pk or not SalesDocumentItem.objects.filter(
+            order_item__customer_order_id=self.pk, document__is_applied=True,
+        ).exists():
+            return
+        previous = type(self).objects.get(pk=self.pk)
+        fields = ("is_applied", "dt_applied", "customer_id", "organization_id", "to_remove", "retail_store_id")
+        if getattr(self, "_force_current_date", False) or any(
+            getattr(self, field) != getattr(previous, field) for field in fields
+        ):
+            raise ValidationError(_("Сначала снимите проведение связанных реализаций: изменение реквизитов и перепроведение заказа заблокированы."))
+
+    def clean(self):
+        super().clean()
+        self.validate_sales_lock()
+
+    def save(self, *args, **kwargs):
+        self.validate_sales_lock()
+        super().save(*args, **kwargs)
+
     class Meta:
         verbose_name = _("Заказ покупателя")
         verbose_name_plural = _("Заказы покупателей")
@@ -703,29 +723,53 @@ class SalesInvoice(BaseDocumentModel):
 
 class SalesInvoiceItem(models.Model):
     invoice = models.ForeignKey(
-        SalesInvoice,
-        on_delete=models.CASCADE,
-        related_name="items",
-        verbose_name=_("Счет на оплату покупателю"),
+        "SalesInvoice", on_delete=models.CASCADE, related_name="items"
     )
-    order_item = models.OneToOneField(
-        OrderItem,
-        on_delete=models.PROTECT,
-        related_name="sales_invoice_item",
+    order_item = models.ForeignKey(
+        "OrderItem",
+        on_delete=models.PROTECT,  # Рекомендую PROTECT, чтобы случайно не "снести" строку в проведенном счете
+        related_name="sales_invoice_items",
         verbose_name=_("Строка заказа"),
     )
+    quantity = models.DecimalField(
+        _("Количество по счёту"), max_digits=14, decimal_places=6, blank=True,
+        validators=[MinValueValidator(Decimal("0.000001"))],
+    )
+
+    @property
+    def total_price(self):
+        price = self.order_item.customer_price
+        if price is None or self.quantity is None:
+            return None
+        return (self.quantity * price).quantize(Decimal("0.01"))
+
+    def save(self, *args, **kwargs):
+        if self.quantity is None and self.order_item_id:
+            from .sales_invoices import with_sales_invoice_balance
+            self.quantity = with_sales_invoice_balance(
+                OrderItem.objects.filter(pk=self.order_item_id), self.invoice_id,
+            ).get().invoice_remaining
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        if self.order_item_id and self.quantity is not None:
+            places = max(0, -self.quantity.normalize().as_tuple().exponent)
+            if places > self.order_item.product.unit.decimal_places:
+                raise ValidationError({"quantity": _("Количество не соответствует точности единицы измерения товара.")})
+
     sort_order = models.PositiveIntegerField(
-        default=0,
-        blank=True,
-        null=True,
-        db_index=True,
-        verbose_name=_("Порядок"),
+        default=0, blank=True, null=True, verbose_name=_("Порядок"), db_index=True
     )
 
     class Meta:
-        verbose_name = _("Позиция счета на оплату покупателю")
-        verbose_name_plural = _("Позиции счета на оплату покупателю")
+        verbose_name = _("Позиция счета покупателю")
+        verbose_name_plural = _("Позиции счета покупателю")
         ordering = ["sort_order"]
+        constraints = [
+            models.UniqueConstraint(fields=("invoice", "order_item"), name="unique_sales_invoice_order_item"),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name="sales_invoice_quantity_positive"),
+        ]
 
     def __str__(self):
         return f"{self.invoice.id} [# {self.sort_order}] <- {self.order_item}"
@@ -787,6 +831,11 @@ class PaymentOrderIn(BaseBankPayment):
     amount = models.DecimalField(
         max_digits=12, decimal_places=2, verbose_name=_("Сумма"),
         validators=[MinValueValidator(Decimal("0.01"))],
+    )
+
+    sales_invoices = models.ManyToManyField(
+        "SalesInvoice", through="PaymentInItem", blank=True,
+        verbose_name=_("Оплаченные счета покупателей"),
     )
 
     def clean(self):
@@ -1057,6 +1106,46 @@ class PaymentOutItem(models.Model):
         ordering = ("sort_order", "pk")
 
 
+class PaymentInItem(models.Model):
+    sort_order = models.PositiveIntegerField(
+        _("Порядок"), default=0, blank=True, null=True, db_index=True
+    )
+    payment = models.ForeignKey(PaymentOrderIn, on_delete=models.CASCADE)
+    invoice = models.ForeignKey(SalesInvoice, on_delete=models.CASCADE)
+
+    # Сумма, которую мы относим на этот конкретный счет
+    amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_("Сумма оплаты"),
+    )
+
+    def save(self, *args, resolve_amount=True, **kwargs):
+        if resolve_amount and (self.amount is None or self.amount == 0) and self.invoice_id:
+            invoice_total = self.invoice.items.aggregate(
+                total=models.Sum(F("quantity") * F("order_item__customer_price"))
+            )["total"] or Decimal("0.00")
+            paid_total = (
+                PaymentInItem.objects.filter(
+                    invoice_id=self.invoice_id,
+                    payment__is_applied=True,
+                )
+                .exclude(pk=self.pk)
+                .aggregate(total=models.Sum("amount"))["total"]
+                or Decimal("0.00")
+            )
+            self.amount = max(invoice_total - paid_total, Decimal("0.00"))
+
+        super().save(*args, **kwargs)
+
+    class Meta:
+        verbose_name = _("Оплата счета")
+        verbose_name_plural = _("Оплата счетов")
+        ordering = ("sort_order", "pk")
+
+
 class GoodsReceipt(BaseDocumentModel):
     supplier_delivery_note_number = models.CharField(
         _("Номер расходной накладной поставщика"), max_length=100, blank=True,
@@ -1184,6 +1273,15 @@ class SalesDocument(BaseDocumentModel):
         verbose_name=_("Основание: Заказы покупателей"),
     )
 
+    def get_order_customer_ids(self):
+        if not self.customer_id:
+            return []
+        ids = [self.customer_id]
+        holding_id = Contractor.objects.filter(pk=self.customer_id).values_list("parent_holding_id", flat=True).first()
+        if holding_id:
+            ids.append(holding_id)
+        return ids
+
     def clean(self):
         super().clean()
         order_ids = getattr(self, "_selected_order_ids", None)
@@ -1192,8 +1290,8 @@ class SalesDocument(BaseDocumentModel):
         for order in CustomerOrder.objects.filter(pk__in=order_ids):
             if not order.is_applied or order.to_remove:
                 raise ValidationError({"orders": _("Выберите проведённые заказы покупателей без пометки на удаление.")})
-            if order.customer_id != self.customer_id:
-                raise ValidationError({"orders": _("Все заказы должны принадлежать покупателю реализации.")})
+            if order.customer_id not in self.get_order_customer_ids():
+                raise ValidationError({"orders": _("Все заказы должны принадлежать покупателю реализации или его холдингу.")})
             if (order.organization_id != self.organization_id
                     and not order.items.filter(organization_id=self.organization_id).exists()):
                 raise ValidationError({"organization": _("Организация реализации должна совпадать с организацией заказа или его строк.")})
@@ -1244,7 +1342,7 @@ class SalesDocumentItem(models.Model):
                 order_ids = document.orders.values_list("pk", flat=True)
             if not item.customer_order_id or (order_ids is not None and item.customer_order_id not in order_ids):
                 raise ValidationError({"order_item": _("Строка не принадлежит выбранным заказам покупателя.")})
-            if item.customer_order.customer_id != document.customer_id:
+            if item.customer_order.customer_id not in document.get_order_customer_ids():
                 raise ValidationError({"order_item": _("Покупатель строки заказа не совпадает с реализацией.")})
             organization_id = item.organization_id or (
                 item.customer_order.organization_id if item.customer_order_id else None

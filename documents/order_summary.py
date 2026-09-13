@@ -3,15 +3,32 @@ from decimal import Decimal
 
 from django.db.models import Prefetch, Q, Sum
 
-from .models import GoodsReceipt, GoodsReceiptItem, InvoiceItem, PaymentOutItem, PurchaseInvoice
+from .models import GoodsReceipt, GoodsReceiptItem, InvoiceItem, PaymentOutItem, PurchaseInvoice, SalesDocument, SalesDocumentItem, SalesInvoice, SalesInvoiceItem, PaymentInItem
 
 ZERO = Decimal("0")
 
 
 def supplier_order_summary(order):
+    return _order_summary(order)
+
+
+def customer_order_summary(order):
+    return _order_summary(order, customer=True)
+
+
+def _order_summary(order, customer=False):
+    receipt_model = SalesDocument if customer else GoodsReceipt
+    receipt_item_model = SalesDocumentItem if customer else GoodsReceiptItem
+    invoice_model = SalesInvoice if customer else PurchaseInvoice
+    invoice_item_model = SalesInvoiceItem if customer else InvoiceItem
+    payment_item_model = PaymentInItem if customer else PaymentOutItem
+    order_field = "customer_order" if customer else "purchase_order"
+    price_field = "customer_price" if customer else "purchase_price"
+    party_field = "customer" if customer else "supplier"
+    receipt_field = "document" if customer else "receipt"
     lines = list(order.items.select_related("product__unit"))
-    received = dict(GoodsReceiptItem.objects.filter(
-        order_item__purchase_order=order, receipt__is_applied=True,
+    received = dict(receipt_item_model.objects.filter(
+        **{f"order_item__{order_field}": order, f"{receipt_field}__is_applied": True},
     ).values("order_item_id").annotate(total=Sum("quantity")).values_list("order_item_id", "total"))
     quantities = {}
     amounts = {"ordered": ZERO, "received": ZERO, "pending": ZERO}
@@ -23,31 +40,31 @@ def supplier_order_summary(order):
         counts["pending"] = max(line.quantity - counts["received"], ZERO)
         for kind, quantity in counts.items():
             group[kind] += quantity
-            if quantity and line.purchase_price is None:
+            if quantity and getattr(line, price_field) is None:
                 amounts[kind] = None
-            elif amounts[kind] is not None and line.purchase_price is not None:
-                amounts[kind] += quantity * line.purchase_price
+            elif amounts[kind] is not None and getattr(line, price_field) is not None:
+                amounts[kind] += quantity * getattr(line, price_field)
 
-    invoices = list(PurchaseInvoice.objects.filter(
-        Q(orders=order) | Q(items__order_item__purchase_order=order),
-    ).distinct().order_by("pk").select_related("supplier").prefetch_related(Prefetch(
-        "items", queryset=InvoiceItem.objects.select_related("order_item"),
+    invoices = list(invoice_model.objects.filter(
+        Q(orders=order) | Q(**{f"items__order_item__{order_field}": order}),
+    ).distinct().order_by("pk").select_related(party_field).prefetch_related(Prefetch(
+        "items", queryset=invoice_item_model.objects.select_related("order_item"),
     )))
-    receipts = list(GoodsReceipt.objects.filter(
-        Q(orders=order) | Q(items__order_item__purchase_order=order),
-    ).distinct().order_by("pk").select_related("supplier").prefetch_related(Prefetch(
-        "items", queryset=GoodsReceiptItem.objects.select_related("order_item"),
+    receipts = list(receipt_model.objects.filter(
+        Q(orders=order) | Q(**{f"items__order_item__{order_field}": order}),
+    ).distinct().order_by("pk").select_related(party_field).prefetch_related(Prefetch(
+        "items", queryset=receipt_item_model.objects.select_related("order_item"),
     )))
-    payments = dict(PaymentOutItem.objects.filter(
+    payments = dict(payment_item_model.objects.filter(
         invoice_id__in=[invoice.pk for invoice in invoices], payment__is_applied=True,
     ).values("invoice_id").annotate(total=Sum("amount")).values_list("invoice_id", "total"))
     for document in [*invoices, *receipts]:
         document_lines = list(document.items.all())
-        if any(line.order_item.purchase_price is None for line in document_lines):
+        if any(getattr(line.order_item, price_field) is None for line in document_lines):
             document.summary_total = None
         else:
             document.summary_total = sum(
-                (line.quantity * line.order_item.purchase_price for line in document_lines), ZERO,
+                (line.quantity * getattr(line.order_item, price_field) for line in document_lines), ZERO,
             ).quantize(Decimal("0.01"))
     for invoice in invoices:
         invoice.summary_paid = payments.get(invoice.pk, ZERO).quantize(Decimal("0.01"))
@@ -59,19 +76,19 @@ def supplier_order_summary(order):
         if not payment:
             continue
         invoice_lines = list(invoice.items.all())
-        own_lines = [line for line in invoice_lines if line.order_item.purchase_order_id == order.pk]
+        own_lines = [line for line in invoice_lines if getattr(line.order_item, f"{order_field}_id") == order.pk]
         if not own_lines:
             continue
-        shared = any(line.order_item.purchase_order_id != order.pk for line in invoice_lines)
+        shared = any(getattr(line.order_item, f"{order_field}_id") != order.pk for line in invoice_lines)
         if not shared:
             paid += payment
             continue
         estimated = True
-        if any(line.order_item.purchase_price is None for line in invoice_lines):
+        if any(getattr(line.order_item, price_field) is None for line in invoice_lines):
             paid = None
             break
-        total = sum((line.quantity * line.order_item.purchase_price for line in invoice_lines), ZERO)
-        subtotal = sum((line.quantity * line.order_item.purchase_price for line in own_lines), ZERO)
+        total = sum((line.quantity * getattr(line.order_item, price_field) for line in invoice_lines), ZERO)
+        subtotal = sum((line.quantity * getattr(line.order_item, price_field) for line in own_lines), ZERO)
         if total <= 0:
             paid = None
             break

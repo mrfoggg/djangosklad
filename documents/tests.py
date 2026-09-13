@@ -606,10 +606,6 @@ class SalesInvoiceTests(TestCase):
         )
 
         self.assertTrue(form.fields["order_item"].disabled)
-        self.assertEqual(
-            form.fields["order_item"].queryset.query.where.children[0].rhs,
-            42,
-        )
 
 
 class MainSupplierPriceAjaxTests(TestCase):

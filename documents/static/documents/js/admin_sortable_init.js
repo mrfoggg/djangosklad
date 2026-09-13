@@ -2,7 +2,7 @@ function initializeInlineSorting() {
 	// const isApplied = document.getElementById("id_is_applied").checked;
 	// if (isApplied) return;
 
-	const inlinesTable = document.querySelector("#items-data, #paymentoutitem_set-data");
+	const inlinesTable = document.querySelector("#items-data, #paymentoutitem_set-data, #paymentinitem_set-data");
 	if (!inlinesTable) return;
 
 	const updatePositionNumbers = () => {
@@ -70,7 +70,7 @@ function initializeInlineSorting() {
 		animation: 150,
 		onEnd: updateOrder,
 	});
-	if (inlinesTable.id === "paymentoutitem_set-data") {
+	if (["paymentoutitem_set-data", "paymentinitem_set-data"].includes(inlinesTable.id)) {
 		inlinesTable.closest("form")?.addEventListener("submit", updateOrder);
 	}
 	document.addEventListener("formset:added", injectDragHandles);

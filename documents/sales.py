@@ -19,7 +19,7 @@ def sales_order_items(document, order_ids=None):
     sold = sold.order_by().values("order_item_id").annotate(total=Sum("quantity"))
     queryset = OrderItem.objects.filter(
         customer_order_id__in=order_ids,
-        customer_order__customer_id=document.customer_id,
+        customer_order__customer_id__in=document.get_order_customer_ids(),
         customer_order__is_applied=True,
         customer_order__to_remove=False,
     ).filter(
