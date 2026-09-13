@@ -977,8 +977,9 @@ class GoodsReceipt(BaseDocumentModel):
                 raise ValidationError({"orders": _("Выберите проведённые заказы поставщику без пометки на удаление.")})
             if order.supplier_id not in supplier_ids:
                 raise ValidationError({"orders": _("Все заказы должны принадлежать поставщику поступления или его холдингу.")})
-            if order.organization_id and self.organization_id != order.organization_id:
-                raise ValidationError({"organization": _("Организация поступления должна совпадать с организацией заказа.")})
+            if (order.organization_id and self.organization_id != order.organization_id
+                    and not order.items.filter(organization_id=self.organization_id).exists()):
+                raise ValidationError({"organization": _("Организация поступления должна совпадать с организацией заказа или его строк.")})
         if self.is_applied and self.to_remove:
             raise ValidationError({"to_remove": _("Проведённое поступление нельзя пометить на удаление.")})
 

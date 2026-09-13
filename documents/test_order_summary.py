@@ -198,7 +198,7 @@ class SupplierOrderSummaryTests(TestCase):
         )
         OrderItem.objects.create(
             customer_order=customer_order, organization=self.organization, product=self.product,
-            warehouse=self.warehouse, quantity=1, customer_price=300,
+            warehouse=self.warehouse, quantity=1, purchase_price=250, customer_price=300,
         )
         model_admin = admin.site._registry[PurchaseOrder]
         html = str(model_admin.linked_customer_orders(self.order))
@@ -206,7 +206,9 @@ class SupplierOrderSummaryTests(TestCase):
         self.assertEqual(html.count(f'href="{url}"'), 1)
         self.assertNotIn(reverse("admin:documents_customerorder_change", args=[unrelated.pk]), html)
         self.assertIn("Покупатель итогов", html)
-        self.assertIn("2200,00 грн", html)
+        self.assertIn("Количество товаров: 13 · Наименований: 1", html)
+        self.assertIn("Сумма закупки: 1450,00 грн", html)
+        self.assertIn("Сумма продажи: 2200,00 грн", html)
         self.assertIn("Черновик", html)
         self.assertIn("linked_customer_orders", model_admin.readonly_fields)
         self.assertIn("linked_customer_orders", model_admin.fields)

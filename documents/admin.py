@@ -4,7 +4,8 @@ from urllib.parse import urlencode
 from django import forms
 from django.contrib import admin
 from django.core.exceptions import PermissionDenied
-from django.http import Http404, HttpResponseRedirect
+from django.http import Http404, HttpResponse, HttpResponseRedirect
+from django.template.response import TemplateResponse
 from django.db.models import Count, DecimalField, F, OuterRef, Q, Subquery, Sum, Value, Window
 from django.db.models.functions import Coalesce, RowNumber
 from django.forms.models import BaseInlineFormSet
@@ -47,7 +48,8 @@ from .receipts import receipt_order_items
 from .invoices import invoice_order_items, with_invoice_balance
 from .order_lines import with_order_position
 from .order_summary import supplier_order_summary
-from .source_order_admin import SourceOrderAdminMixin, SourceOrderFormSetMixin
+from .source_order_admin import (SourceOrderAdminMixin, SourceOrderFormSetMixin,
+                                 SourceOrderOrganizationForm, source_order_organizations)
 
 
 BASE_READONLY_DATES = ("created", "updated")
@@ -1130,19 +1132,26 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
         entries = []
         for order in orders:
             items = list(order.items.all())
-            total = None if any(item.customer_price is None for item in items) else sum(
-                (item.quantity * item.customer_price for item in items), Decimal("0"),
-            )
+            totals = {}
+            for price_field in ("purchase_price", "customer_price"):
+                totals[price_field] = None if any(getattr(item, price_field) is None for item in items) else sum(
+                    (item.quantity * getattr(item, price_field) for item in items), Decimal("0"),
+                )
+            quantity = sum((item.quantity for item in items), Decimal("0"))
+            quantity_places = max(0, -quantity.normalize().as_tuple().exponent)
+            product_count = len({item.product_id for item in items})
             entries.append((
                 reverse("admin:documents_customerorder_change", args=[order.pk]),
                 f"№{order.pk}", order.customer,
                 f"{localdate(order.created):%d.%m.%Y}",
                 _("Проведён") if order.is_applied else _("Черновик"),
-                self._money(total),
+                number_format(quantity, decimal_pos=quantity_places, use_l10n=True), product_count,
+                self._money(totals["purchase_price"]), self._money(totals["customer_price"]),
             ))
         return format_html_join(
             "", '<div class="mb-3"><div><a href="{}">{}</a> · {} · Создан: {} · {}</div>'
-            '<div>Сумма заказа: {}</div></div>', entries,
+            '<div>Количество товаров: {} · Наименований: {}</div>'
+            '<div>Сумма закупки: {} · Сумма продажи: {}</div></div>', entries,
         ) or "—"
 
     @admin.display(description=_("Итоги поставки"))
@@ -1208,8 +1217,21 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
             raise Http404
         if not self._can_create_from_order(request, object_id, target):
             raise PermissionDenied
+        organizations = source_order_organizations(order)
+        params = {"from_order": order.pk}
+        if organizations.count() > 1:
+            form = SourceOrderOrganizationForm(request, order, data=request.POST or None)
+            if not form.is_valid():
+                return TemplateResponse(request, "unfold/helpers/dialog.html", {
+                    "dialog": self.source_organization_dialog,
+                    "form": form, "form_submit_text": _("Продолжить"),
+                })
+            params["organization"] = form.cleaned_data["organization"].pk
         url = reverse(f"admin:documents_{target._meta.model_name}_add")
-        return HttpResponseRedirect(f"{url}?{urlencode({'from_order': order.pk})}")
+        url = f"{url}?{urlencode(params)}"
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponse(headers={"HX-Redirect": url})
+        return HttpResponseRedirect(url)
 
     @action(description=_("Счёт поставщика"), permissions=["create_supplier_invoice"])
     def create_supplier_invoice(self, request, object_id):
@@ -1218,6 +1240,14 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     @action(description=_("Поступление товаров"), permissions=["create_goods_receipt"])
     def create_goods_receipt(self, request, object_id):
         return self._create_from_order(request, object_id, GoodsReceipt)
+
+    source_organization_dialog = {
+        "title": _("Выберите организацию"),
+        "description": _("Для какой организации создать документ?"),
+    }
+    # Set UI metadata separately: the handler skips the dialog for a single organization.
+    create_supplier_invoice.dialog = source_organization_dialog
+    create_goods_receipt.dialog = source_organization_dialog
 
     class Media:
         js = [

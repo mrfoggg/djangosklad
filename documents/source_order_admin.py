@@ -6,12 +6,33 @@ from django.http import Http404, HttpResponseRedirect
 from django.template.response import TemplateResponse
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from unfold.forms import BaseDialogForm
 from unfold.widgets import UnfoldAdminSelectWidget
 
 from catalogs.models import Organization
 from .invoices import invoice_order_items
 from .models import GoodsReceipt, PurchaseInvoice, PurchaseOrder
 from .receipts import receipt_order_items
+
+
+def source_order_organizations(order):
+    row_ids = list(order.items.values_list("organization_id", flat=True))
+    organization_ids = {value or order.organization_id for value in row_ids}
+    if not row_ids:
+        organization_ids.add(order.organization_id)
+    organization_ids.discard(None)
+    return Organization.objects.filter(pk__in=organization_ids).order_by("pk")
+
+
+class SourceOrderOrganizationForm(BaseDialogForm):
+    organization = forms.ModelChoiceField(
+        queryset=Organization.objects.none(), label=_("Организация"),
+        widget=UnfoldAdminSelectWidget,
+    )
+
+    def __init__(self, request, order, **kwargs):
+        super().__init__(request, object_id=order.pk, **kwargs)
+        self.fields["organization"].queryset = source_order_organizations(order)
 
 
 class SourceOrderFormSetMixin:
@@ -41,9 +62,7 @@ class SourceOrderAdminMixin:
         return order
 
     def _source_organizations(self, order):
-        if order.organization_id:
-            return Organization.objects.filter(pk=order.organization_id)
-        return Organization.objects.filter(pk__in=order.items.values("organization_id")).order_by("pk")
+        return source_order_organizations(order)
 
     def _source_organization_id(self, request, order):
         choices = self._source_organizations(order)

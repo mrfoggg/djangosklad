@@ -101,10 +101,21 @@ class SourceOrderActionTests(TestCase):
         other_item = OrderItem.objects.create(purchase_order=self.order, organization=other,
                                               product=self.product, warehouse=self.warehouse, quantity=3, purchase_price=100)
         for kind in ("invoice", "receipt"):
-            redirect = self.client.get(self.action_url(kind))
-            chooser = self.client.get(redirect.url)
+            chooser = self.client.get(self.action_url(kind), HTTP_HX_REQUEST="true")
             self.assertContains(chooser, "Выберите организацию")
-            response = self.client.get(redirect.url + f"&organization={other.pk}")
+            self.assertEqual(
+                set(chooser.context["form"].fields["organization"].queryset),
+                {self.organization, other},
+            )
+            invalid = self.client.post(self.action_url(kind), {
+                "organization": Organization.objects.create(name=f"Чужая {kind}").pk,
+                "_form_submitted": "on",
+            }, HTTP_HX_REQUEST="true")
+            self.assertTrue(invalid.context["form"].errors)
+            redirect = self.client.post(self.action_url(kind), {
+                "organization": other.pk, "_form_submitted": "on",
+            }, HTTP_HX_REQUEST="true")
+            response = self.client.get(redirect.headers["HX-Redirect"])
             rows = response.context["inline_admin_formsets"][0].formset.forms
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].initial["order_item"], other_item.pk)
@@ -149,3 +160,31 @@ class SourceOrderActionTests(TestCase):
         })
         self.assertContains(response, "Доступно для счёта")
         self.assertEqual(PurchaseInvoice.objects.count(), 1)
+
+
+    def test_single_organization_htmx_skips_dialog(self):
+        for kind in ("invoice", "receipt"):
+            response = self.client.get(self.action_url(kind), HTTP_HX_REQUEST="true")
+            self.assertIn("HX-Redirect", response.headers)
+            self.assertNotContains(response, 'id="dialog"')
+
+
+    def test_header_organization_does_not_hide_other_line_organizations(self):
+        other = Organization.objects.create(name="Организация строки")
+        item = OrderItem.objects.create(
+            purchase_order=self.order, organization=other, product=self.product,
+            warehouse=self.warehouse, quantity=3, purchase_price=100,
+        )
+        for kind in ("invoice", "receipt"):
+            chooser = self.client.get(self.action_url(kind), HTTP_HX_REQUEST="true")
+            self.assertContains(chooser, "Выберите организацию")
+            redirect = self.client.post(self.action_url(kind), {
+                "organization": other.pk, "_form_submitted": "on",
+            }, HTTP_HX_REQUEST="true")
+            response = self.client.get(redirect.headers["HX-Redirect"])
+            rows = response.context["inline_admin_formsets"][0].formset.forms
+            self.assertEqual([row.initial["order_item"] for row in rows], [item.pk])
+        receipt = GoodsReceipt(supplier=self.supplier, organization=other, warehouse=self.warehouse)
+        receipt._selected_order_ids = [self.order.pk]
+        receipt.clean()
+        GoodsReceiptItem(receipt=receipt, order_item=item, quantity=Decimal("3")).clean()
