@@ -437,6 +437,21 @@ def configure_order_line_quantity(form):
     field.queryset = with_order_position(field.queryset, customer=customer).select_related(
         "product__unit", "customer_order" if customer else "purchase_order",
     )
+    # Display the actual remainder including the current posted document.
+    # Validation querysets keep their separate allowance excluding that document.
+    line_model = form._meta.model
+    parent_field = "invoice" if line_model in (InvoiceItem, SalesInvoiceItem) else (
+        "receipt" if line_model is GoodsReceiptItem else "document"
+    )
+    posted = line_model.objects.filter(
+        order_item_id=OuterRef("pk"), **{f"{parent_field}__is_applied": True},
+    ).order_by().values("order_item_id").annotate(total=Sum("quantity"))
+    field.queryset = field.queryset.annotate(
+        displayed_remaining=F("quantity") - Coalesce(
+            Subquery(posted.values("total")[:1]), Value(Decimal("0")),
+            output_field=DecimalField(max_digits=14, decimal_places=6),
+        ),
+    )
     item = None
     if form.instance.order_item_id:
         item = field.queryset.filter(pk=form.instance.order_item_id).first()
@@ -490,8 +505,8 @@ class PurchaseInvoiceItemInlineForm(forms.ModelForm):
 
     def label_for_purchase(self, obj):
         number = obj.purchase_order_id or "—"
-        remaining = getattr(obj, "invoice_remaining", obj.quantity)
-        return f"Заказ №{number} | Строка №{obj.order_position_number} | {obj.product.name} | Осталось {remaining:f} {obj.product.unit.symbol}"
+        remaining = getattr(obj, "displayed_remaining", getattr(obj, "invoice_remaining", obj.quantity))
+        return f"Заказ №{number} | Строка №{obj.order_position_number} | {obj.product.name} | {obj.quantity.normalize():f} {obj.product.unit.symbol} · Осталось включить в счета: {remaining.normalize():f} {obj.product.unit.symbol}"
 
 
 class InvoiceItemFormSet(SourceOrderFormSetMixin, BaseInlineFormSet):
@@ -649,8 +664,8 @@ class SalesInvoiceItemInlineForm(forms.ModelForm):
 
     def label_for_purchase(self, obj):
         number = obj.customer_order_id or "—"
-        remaining = getattr(obj, "invoice_remaining", obj.quantity)
-        return f"Заказ №{number} | Строка №{obj.order_position_number} | {obj.product.name} | Осталось {remaining:f} {obj.product.unit.symbol}"
+        remaining = getattr(obj, "displayed_remaining", getattr(obj, "invoice_remaining", obj.quantity))
+        return f"Заказ №{number} | Строка №{obj.order_position_number} | {obj.product.name} | {obj.quantity.normalize():f} {obj.product.unit.symbol} · Осталось включить в счета: {remaining.normalize():f} {obj.product.unit.symbol}"
 
 
 class SalesInvoiceItemFormSet(SourceOrderFormSetMixin, BaseInlineFormSet):
@@ -2152,10 +2167,11 @@ class GoodsReceiptItemForm(forms.ModelForm):
 
     @staticmethod
     def label_for_order_line(item):
-        remaining = getattr(item, "remaining_quantity", item.quantity)
+        remaining = getattr(item, "displayed_remaining", getattr(item, "remaining_quantity", item.quantity))
         return (
             f"Заказ №{item.purchase_order_id} | Строка №{item.order_position_number} | "
-            f"{item.product} — осталось {remaining.normalize():f} {item.product.unit.symbol}"
+            f"{item.product} | {item.quantity.normalize():f} {item.product.unit.symbol} · "
+            f"Осталось получить: {remaining.normalize():f} {item.product.unit.symbol}"
         )
 
 
@@ -2326,10 +2342,11 @@ class SalesDocumentItemForm(forms.ModelForm):
 
     @staticmethod
     def label_for_order_line(item):
-        remaining = getattr(item, "remaining_quantity", item.quantity)
+        remaining = getattr(item, "displayed_remaining", getattr(item, "remaining_quantity", item.quantity))
         return (
             f"Заказ №{item.customer_order_id} | Строка №{item.order_position_number} | "
-            f"{item.product} — осталось {remaining.normalize():f} {item.product.unit.symbol}"
+            f"{item.product} | {item.quantity.normalize():f} {item.product.unit.symbol} · "
+            f"Осталось отгрузить: {remaining.normalize():f} {item.product.unit.symbol}"
         )
 
 
