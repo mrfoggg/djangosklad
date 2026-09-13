@@ -35,7 +35,7 @@ class GoodsReceiptTests(TestCase):
 
     def post_receipt(self, *, quantity=None, applied=False, fill=False, receipt=None, **overrides):
         data = {
-            "organization": self.organization.pk, "purchase_order": self.order.pk,
+            "organization": self.organization.pk, "supplier": self.supplier.pk, "orders": [self.order.pk],
             "warehouse": self.warehouse.pk,
             "items-TOTAL_FORMS": "0", "items-INITIAL_FORMS": "0", "_save": "Save",
         }
@@ -64,8 +64,8 @@ class GoodsReceiptTests(TestCase):
             self.fail(f"Receipt not saved: {errors}; {inline_errors}")
 
     def balance(self, receipt=None):
-        context = receipt or GoodsReceipt(purchase_order=self.order, organization=self.organization)
-        return receipt_order_items(context).get(pk=self.item.pk).remaining_quantity
+        context = receipt or GoodsReceipt(supplier=self.supplier, organization=self.organization)
+        return receipt_order_items(context, None if receipt else [self.order.pk]).get(pk=self.item.pk).remaining_quantity
 
     def test_partial_receipts_and_autofill_remaining(self):
         self.assert_saved(self.post_receipt(quantity=6, applied=True))
@@ -152,7 +152,8 @@ class GoodsReceiptTests(TestCase):
 
     def test_line_must_belong_to_receipt_order(self):
         other = PurchaseOrder.objects.create(supplier=self.supplier, organization=self.organization, is_applied=True)
-        receipt = GoodsReceipt(purchase_order=other, organization=self.organization, warehouse=self.warehouse)
+        receipt = GoodsReceipt(supplier=self.supplier, organization=self.organization, warehouse=self.warehouse)
+        receipt._selected_order_ids = [other.pk]
         row = GoodsReceiptItem(receipt=receipt, order_item=self.item, quantity=Decimal("1"))
         with self.assertRaises(ValidationError):
             row.full_clean(exclude=("receipt",))
@@ -294,3 +295,86 @@ class GoodsReceiptTests(TestCase):
         self.assertEqual([row.calculated_position_number for row in rows], [1, 2, 3])
         for number, row in enumerate(rows, 1):
             self.assertIn(f'>{number}</span>', str(inline.position_number(row)))
+
+    def create_second_order(self, *, supplier=None, organization=None):
+        order = PurchaseOrder.objects.create(
+            supplier=supplier or self.supplier,
+            organization=organization or self.organization, is_applied=True,
+        )
+        item = OrderItem.objects.create(
+            purchase_order=order, organization=order.organization,
+            product=self.product, warehouse=self.warehouse,
+            quantity=5, purchase_price=Decimal("20"),
+        )
+        return order, item
+
+    def test_fill_from_two_orders_and_lock_both_orders(self):
+        second_order, second_item = self.create_second_order()
+        self.assert_saved(self.post_receipt(quantity=6, applied=True))
+        self.assert_saved(self.post_receipt(
+            fill=True, applied=True, orders=[self.order.pk, second_order.pk],
+        ))
+        receipt = GoodsReceipt.objects.latest("pk")
+        self.assertEqual(set(receipt.orders.values_list("pk", flat=True)), {self.order.pk, second_order.pk})
+        self.assertEqual(
+            dict(receipt.items.values_list("order_item_id", "quantity")),
+            {self.item.pk: Decimal("4"), second_item.pk: Decimal("5")},
+        )
+        self.assertEqual(sum(row.total_price for row in receipt.items.all()), Decimal("150"))
+        for order in (self.order, second_order):
+            order.is_applied = False
+            with self.assertRaises(ValidationError):
+                order.save()
+        for item in (self.item, second_item):
+            item.purchase_price = Decimal("999")
+            with self.assertRaises(ValidationError):
+                item.save()
+
+    def test_orders_from_different_suppliers_are_rejected(self):
+        supplier = Contractor.objects.create(last_name="Другой поставщик", is_supplier=True)
+        second_order, _ = self.create_second_order(supplier=supplier)
+        response = self.post_receipt(fill=True, orders=[self.order.pk, second_order.pk])
+        self.assertContains(response, "Все заказы должны принадлежать поставщику поступления")
+        self.assertFalse(GoodsReceipt.objects.exists())
+
+    def test_orders_from_different_organizations_are_rejected(self):
+        second_order, _ = self.create_second_order(organization=self.other_org)
+        response = self.post_receipt(fill=True, orders=[self.order.pk, second_order.pk])
+        self.assertContains(response, "Организация поступления должна совпадать")
+        self.assertFalse(GoodsReceipt.objects.exists())
+
+    def test_unselected_order_line_is_rejected(self):
+        second_order, second_item = self.create_second_order()
+        response = self.post_receipt(quantity=1, **{"items-0-order_item": second_item.pk})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(GoodsReceipt.objects.exists())
+
+    def test_removing_order_with_retained_rows_is_rejected(self):
+        second_order, second_item = self.create_second_order()
+        self.assert_saved(self.post_receipt(fill=True, orders=[self.order.pk, second_order.pk]))
+        receipt = GoodsReceipt.objects.get()
+        rows = list(receipt.items.all())
+        data = {"items-TOTAL_FORMS": "2"}
+        for index, row in enumerate(rows):
+            data.update({
+                f"items-{index}-id": row.pk,
+                f"items-{index}-order_item": row.order_item_id,
+                f"items-{index}-quantity": str(row.quantity),
+                f"items-{index}-sort_order": row.sort_order,
+            })
+        response = self.post_receipt(receipt=receipt, **data)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(receipt.orders.count(), 2)
+        self.assertEqual(receipt.items.count(), 2)
+
+    def test_add_another_order_when_editing_receipt(self):
+        second_order, second_item = self.create_second_order()
+        self.assert_saved(self.post_receipt(quantity=6))
+        receipt = GoodsReceipt.objects.get()
+        self.assert_saved(self.post_receipt(
+            quantity=6, receipt=receipt, fill=True, orders=[self.order.pk, second_order.pk],
+        ))
+        self.assertEqual(
+            dict(receipt.items.values_list("order_item_id", "quantity")),
+            {self.item.pk: Decimal("6"), second_item.pk: Decimal("5")},
+        )

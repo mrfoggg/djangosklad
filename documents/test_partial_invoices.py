@@ -189,14 +189,15 @@ class PartialInvoiceTests(TestCase):
         )
         self.assert_saved(self.post_invoice(10, applied=True))
         receipt = GoodsReceipt.objects.create(
-            purchase_order=self.order, organization=self.organization, warehouse=self.warehouse, is_applied=True,
+            supplier=self.supplier, organization=self.organization, warehouse=self.warehouse, is_applied=True,
         )
+        receipt.orders.add(self.order)
         GoodsReceiptItem.objects.create(receipt=receipt, order_item=self.item, quantity=10)
         invoice_context = PurchaseInvoice(supplier=self.supplier, organization=self.organization)
-        receipt_context = GoodsReceipt(purchase_order=self.order, organization=self.organization)
+        receipt_context = GoodsReceipt(supplier=self.supplier, organization=self.organization)
         forms = (
             PurchaseInvoiceItemInlineForm(invoice_context=invoice_context, order_ids=[self.order.pk]),
-            GoodsReceiptItemForm(receipt_context=receipt_context),
+            GoodsReceiptItemForm(receipt_context=receipt_context, order_ids=[self.order.pk]),
         )
         for form in forms:
             with self.subTest(form=type(form).__name__):

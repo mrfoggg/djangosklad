@@ -940,9 +940,14 @@ class GoodsReceipt(BaseDocumentModel):
         _("Дата расходной накладной поставщика"), blank=True, null=True,
     )
 
-    purchase_order = models.ForeignKey(
-        PurchaseOrder, on_delete=models.PROTECT, related_name="goods_receipts",
-        verbose_name=_("Заказ поставщику"),
+    supplier = models.ForeignKey(
+        "catalogs.Contractor", on_delete=models.PROTECT,
+        limit_choices_to={"is_supplier": True}, related_name="goods_receipts",
+        verbose_name=_("Поставщик"),
+    )
+    orders = models.ManyToManyField(
+        PurchaseOrder, related_name="goods_receipts", blank=True,
+        verbose_name=_("Основание: Заказы поставщику"),
     )
     warehouse = models.ForeignKey(
         "catalogs.Warehouse", on_delete=models.PROTECT,
@@ -952,13 +957,16 @@ class GoodsReceipt(BaseDocumentModel):
 
     def clean(self):
         super().clean()
-        if not self.purchase_order_id:
-            return
-        order = self.purchase_order
-        if not order.is_applied or order.to_remove:
-            raise ValidationError({"purchase_order": _("Выберите проведённый заказ поставщику без пометки на удаление.")})
-        if order.organization_id and self.organization_id != order.organization_id:
-            raise ValidationError({"organization": _("Организация поступления должна совпадать с организацией заказа.")})
+        order_ids = getattr(self, "_selected_order_ids", None)
+        if order_ids is None:
+            order_ids = self.orders.values_list("pk", flat=True) if self.pk else []
+        for order in PurchaseOrder.objects.filter(pk__in=order_ids):
+            if not order.is_applied or order.to_remove:
+                raise ValidationError({"orders": _("Выберите проведённые заказы поставщику без пометки на удаление.")})
+            if order.supplier_id != self.supplier_id:
+                raise ValidationError({"orders": _("Все заказы должны принадлежать поставщику поступления.")})
+            if order.organization_id and self.organization_id != order.organization_id:
+                raise ValidationError({"organization": _("Организация поступления должна совпадать с организацией заказа.")})
         if self.is_applied and self.to_remove:
             raise ValidationError({"to_remove": _("Проведённое поступление нельзя пометить на удаление.")})
 
@@ -1001,8 +1009,13 @@ class GoodsReceiptItem(models.Model):
                 raise ValidationError({"quantity": _("Количество не соответствует точности единицы измерения товара.")})
         if self.receipt_id or "receipt" in self._state.fields_cache:
             receipt = self.receipt
-            if item.purchase_order_id != receipt.purchase_order_id:
-                raise ValidationError({"order_item": _("Строка не принадлежит выбранному заказу поставщику.")})
+            order_ids = getattr(receipt, "_selected_order_ids", None)
+            if order_ids is None and receipt.pk:
+                order_ids = receipt.orders.values_list("pk", flat=True)
+            if not item.purchase_order_id or (order_ids is not None and item.purchase_order_id not in order_ids):
+                raise ValidationError({"order_item": _("Строка не принадлежит выбранным заказам поставщику.")})
+            if item.purchase_order.supplier_id != receipt.supplier_id:
+                raise ValidationError({"order_item": _("Поставщик строки заказа не совпадает с поступлением.")})
             organization_id = item.organization_id or (
                 item.purchase_order.organization_id if item.purchase_order_id else None
             )

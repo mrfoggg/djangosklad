@@ -1425,7 +1425,7 @@ class PaymentOrderOutAdmin(BaseDocumentAdmin):
 
 class GoodsReceiptForm(DocumentForm):
     fill_from_order = forms.BooleanField(
-        label=_("Заполнить остатком по заказу"), required=False,
+        label=_("Заполнить остатками по заказам"), required=False,
         help_text=_("Добавит отсутствующие строки с неполученным количеством при сохранении. Уже введённые строки сохранятся."),
     )
 
@@ -1435,9 +1435,14 @@ class GoodsReceiptForm(DocumentForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["purchase_order"].queryset = PurchaseOrder.objects.filter(
+        self.fields["orders"].queryset = PurchaseOrder.objects.filter(
             is_applied=True, to_remove=False,
         )
+
+    def clean(self):
+        data = super().clean()
+        self.instance._selected_order_ids = [order.pk for order in data.get("orders", [])]
+        return data
 
 
 class GoodsReceiptItemForm(forms.ModelForm):
@@ -1447,10 +1452,10 @@ class GoodsReceiptItemForm(forms.ModelForm):
         labels = {"sort_order": "⇅"}
         widgets = {"order_item": OrderLineUnitSelectWidget()}
 
-    def __init__(self, *args, receipt_context=None, **kwargs):
+    def __init__(self, *args, receipt_context=None, order_ids=None, **kwargs):
         super().__init__(*args, **kwargs)
         if receipt_context is not None:
-            self.fields["order_item"].queryset = receipt_order_items(receipt_context).filter(
+            self.fields["order_item"].queryset = receipt_order_items(receipt_context, order_ids).filter(
                 Q(remaining_quantity__gt=0) | Q(pk=self.instance.order_item_id)
             )
         self.fields["order_item"].label_from_instance = self.label_for_order_line
@@ -1471,27 +1476,33 @@ class GoodsReceiptItemFormSet(BaseInlineFormSet):
     def get_form_kwargs(self, index):
         kwargs = super().get_form_kwargs(index)
         context = GoodsReceipt(pk=self.instance.pk, organization_id=None)
-        for field in ("purchase_order", "organization"):
+        for field in ("supplier", "organization"):
             value = self.data.get(field) if self.is_bound else getattr(self.instance, f"{field}_id")
             try:
                 value = int(value) if value else None
             except (TypeError, ValueError):
                 value = None
             setattr(context, f"{field}_id", value)
-        kwargs["receipt_context"] = context
+        kwargs.update(receipt_context=context, order_ids=self.selected_order_ids())
         return kwargs
+
+    def selected_order_ids(self):
+        if self.is_bound:
+            values = self.data.getlist("orders")
+            return [int(value) for value in values if str(value).isdigit()]
+        return list(self.instance.orders.values_list("pk", flat=True)) if self.instance.pk else []
 
     def clean(self):
         super().clean()
         self.pending_items = []
-        if any(self.errors) or not self.instance.purchase_order_id or not self.instance.organization_id:
+        if any(self.errors) or not self.instance.supplier_id or not self.instance.organization_id:
             return
         # Admin validates and saves the entire document inside a transaction.
         # Lock source rows before reading balances so concurrent receipts serialize.
         list(OrderItem.objects.select_for_update().filter(
-            purchase_order_id=self.instance.purchase_order_id,
+            purchase_order_id__in=self.selected_order_ids(),
         ).order_by("pk").values_list("pk", flat=True))
-        available = {item.pk: item for item in receipt_order_items(self.instance)}
+        available = {item.pk: item for item in receipt_order_items(self.instance, self.selected_order_ids())}
         used = set()
         for form in self.forms:
             data = form.cleaned_data
@@ -1515,7 +1526,7 @@ class GoodsReceiptItemFormSet(BaseInlineFormSet):
                 row = GoodsReceiptItem(
                     receipt=self.instance, order_item=item,
                     quantity=item.remaining_quantity,
-                    sort_order=item.sort_order_purchase,
+                    sort_order=len(self.forms) + len(self.pending_items),
                 )
                 try:
                     row.full_clean(exclude=("receipt",))
@@ -1561,21 +1572,19 @@ class GoodsReceiptAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     form = GoodsReceiptForm
     total_field = F("items__quantity") * F("items__order_item__purchase_price")
     product_field = "items__order_item__product"
-    list_display = ("id", "supplier_delivery_note_number", "supplier_delivery_note_date", "purchase_order", "supplier", "organization", "warehouse", "order_total", "is_applied", "created")
-    list_display_links = ("id", "purchase_order")
+    list_display = ("id", "supplier_delivery_note_number", "supplier_delivery_note_date", "supplier", "organization", "warehouse", "order_total", "is_applied", "created")
+    list_display_links = ("id", "supplier")
     search_fields = ("supplier_delivery_note_number",)
-    list_filter = ("is_applied", "organization", "warehouse", "purchase_order__supplier")
+    list_filter = ("is_applied", "organization", "warehouse", "supplier")
     fields = BASE_FIELDS + (
         ("supplier_delivery_note_number", "supplier_delivery_note_date"),
-        "purchase_order", "supplier", "warehouse", "fill_from_order",
+        "supplier", "orders", "warehouse", "fill_from_order",
         ("order_total", "order_quantity", "product_count"), "comment",
     )
-    readonly_fields = BASE_READONLY + ("supplier", "order_total", "order_quantity", "product_count")
+    readonly_fields = BASE_READONLY + ( "order_total", "order_quantity", "product_count")
     inlines = (GoodsReceiptItemInline,)
 
-    @admin.display(description=_("Поставщик"))
-    def supplier(self, obj):
-        return obj.purchase_order.supplier if obj and obj.purchase_order_id else "—"
+    filter_horizontal = ("orders",)
 
     class Media:
         js = [
