@@ -1127,6 +1127,8 @@ class PurchaseInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     product_field = "items__order_item__product"
     list_display = (
         "id",
+        "supplier_invoice_number",
+        "supplier_invoice_date",
         "supplier",
         "organization",
         "order_total",
@@ -1137,12 +1139,14 @@ class PurchaseInvoiceAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     )
     list_display_links = ("id", "supplier")
     list_filter = ("is_applied", "supplier")
+    search_fields = ("supplier_invoice_number",)
     readonly_fields = BASE_READONLY + (
         "order_total",
         "order_quantity",
         "product_count",
     )
     fields = BASE_FIELDS + (
+        ("supplier_invoice_number", "supplier_invoice_date"),
         "supplier",
         "bank_account",
         "orders",

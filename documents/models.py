@@ -489,6 +489,13 @@ class OrderItem(models.Model):
 
 
 class PurchaseInvoice(BaseDocumentModel):
+    supplier_invoice_number = models.CharField(
+        _("Номер счёта поставщика"), max_length=100, blank=True,
+    )
+    supplier_invoice_date = models.DateField(
+        _("Дата счёта поставщика"), blank=True, null=True,
+    )
+
     supplier = models.ForeignKey(
         "catalogs.Contractor",
         on_delete=models.CASCADE,
