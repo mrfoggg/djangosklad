@@ -683,6 +683,64 @@ class NovaPoshtaRegion(models.Model):
         return self.description
 
 
+class NovaPoshtaSettlement(models.Model):
+    ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
+    area = models.ForeignKey(
+        NovaPoshtaArea, on_delete=models.PROTECT,
+        related_name="settlements", verbose_name=_("Область"),
+    )
+    region = models.ForeignKey(
+        NovaPoshtaRegion, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="settlements", verbose_name=_("Район"),
+    )
+    settlement_type = models.UUIDField(verbose_name=_("Ref типа населённого пункта"))
+    description = models.CharField(max_length=255, verbose_name=_("Название"))
+    description_ru = models.CharField(max_length=255, blank=True, verbose_name=_("Название на русском"))
+    description_translit = models.CharField(max_length=255, blank=True, verbose_name=_("Название латиницей"))
+    settlement_type_description = models.CharField(max_length=100, verbose_name=_("Тип населённого пункта"))
+    settlement_type_description_ru = models.CharField(max_length=100, blank=True, verbose_name=_("Тип на русском"))
+    settlement_type_description_translit = models.CharField(max_length=100, blank=True, verbose_name=_("Тип латиницей"))
+    latitude = models.DecimalField(
+        max_digits=18, decimal_places=15, null=True, blank=True,
+        validators=[MinValueValidator(Decimal("-90")), MaxValueValidator(Decimal("90"))],
+        verbose_name=_("Широта"),
+    )
+    longitude = models.DecimalField(
+        max_digits=18, decimal_places=15, null=True, blank=True,
+        validators=[MinValueValidator(Decimal("-180")), MaxValueValidator(Decimal("180"))],
+        verbose_name=_("Долгота"),
+    )
+    index_1 = models.CharField(max_length=20, blank=True, verbose_name=_("Начальный индекс"))
+    index_2 = models.CharField(max_length=20, blank=True, verbose_name=_("Конечный индекс"))
+    index_coatsu_1 = models.CharField(max_length=20, blank=True, verbose_name=_("Код КОАТУУ"))
+    delivery_1 = models.BooleanField(null=True, blank=True, verbose_name=_("Доставка: понедельник"))
+    delivery_2 = models.BooleanField(null=True, blank=True, verbose_name=_("Доставка: вторник"))
+    delivery_3 = models.BooleanField(null=True, blank=True, verbose_name=_("Доставка: среда"))
+    delivery_4 = models.BooleanField(null=True, blank=True, verbose_name=_("Доставка: четверг"))
+    delivery_5 = models.BooleanField(null=True, blank=True, verbose_name=_("Доставка: пятница"))
+    delivery_6 = models.BooleanField(null=True, blank=True, verbose_name=_("Доставка: суббота"))
+    delivery_7 = models.BooleanField(null=True, blank=True, verbose_name=_("Доставка: воскресенье"))
+    special_cash_check = models.BooleanField(null=True, blank=True, verbose_name=_("SpecialCashCheck"))
+    radius_home_delivery = models.PositiveIntegerField(null=True, blank=True, verbose_name=_("Радиус адресной доставки"))
+    radius_express_pick_up = models.PositiveIntegerField(null=True, blank=True, verbose_name=_("Радиус экспресс-забора"))
+    radius_drop = models.PositiveIntegerField(null=True, blank=True, verbose_name=_("Радиус сдачи отправлений"))
+    warehouse = models.BooleanField(null=True, blank=True, verbose_name=_("Есть отделения"))
+    address_delivery_allowed = models.BooleanField(null=True, blank=True, verbose_name=_("Адресная доставка доступна"))
+
+    class Meta:
+        verbose_name = _("Новая почта: населённый пункт")
+        verbose_name_plural = _("Новая почта: населённые пункты")
+        ordering = ("description", "ref")
+
+    def __str__(self):
+        return f"{self.settlement_type_description} {self.description}"
+
+    def clean(self):
+        super().clean()
+        if self.region_id and self.area_id and self.region.area_id != self.area_id:
+            raise ValidationError({"region": _("Район не относится к выбранной области.")})
+
+
 class DeliveryMethod(BaseModel):
     class Kind(models.TextChoices):
         CARRIER = "carrier", _("Перевозчик")

@@ -1,9 +1,11 @@
+import re
+
 from django import forms
 from django.contrib import admin, messages
 from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.urls import reverse
-from django.db import models
+from django.db import connection, models
 from django.utils.translation import gettext_lazy as _
 from django_countries.widgets import CountrySelectWidget
 from mptt.admin import DraggableMPTTAdmin
@@ -11,8 +13,8 @@ from unfold.admin import ModelAdmin, StackedInline, TabularInline
 from unfold.contrib.forms.widgets import WysiwygWidget
 from unfold.decorators import action
 
-from .forms import NovaPoshtaRegionUpdateForm
-from .nova_poshta import NovaPoshtaError, sync_areas, sync_regions
+from .forms import NovaPoshtaRegionUpdateForm, NovaPoshtaSettlementUpdateForm
+from .nova_poshta import NovaPoshtaError, sync_areas, sync_regions, sync_settlements
 
 from .models import (
     Brand,
@@ -25,6 +27,7 @@ from .models import (
     MeasurementUnit,
     NovaPoshtaArea,
     NovaPoshtaRegion,
+    NovaPoshtaSettlement,
     Organization,
     OurBankAccount,
     Product,
@@ -121,6 +124,77 @@ class NovaPoshtaRegionAdmin(ModelAdmin):
                 messages.SUCCESS,
             )
         url = reverse("admin:catalogs_novaposhtaregion_changelist")
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponse(headers={"HX-Redirect": url})
+        return redirect(url)
+
+
+@admin.register(NovaPoshtaSettlement)
+class NovaPoshtaSettlementAdmin(ModelAdmin):
+    list_display = ("description", "settlement_type_description", "area", "region", "warehouse", "address_delivery_allowed")
+    list_filter = ("area", "warehouse", "address_delivery_allowed")
+    list_select_related = ("area", "region")
+    search_fields = ("description", "description_ru", "description_translit", "ref")
+    autocomplete_fields = ("area", "region")
+    actions_list = ("update_settlements",)
+    fieldsets = (
+        (_("Населённый пункт"), {"fields": (
+            "ref", ("area", "region"), "description", "description_ru", "description_translit",
+        )}),
+        (_("Тип"), {"fields": (
+            "settlement_type", "settlement_type_description",
+            "settlement_type_description_ru", "settlement_type_description_translit",
+        )}),
+        (_("Координаты и индексы"), {"fields": (
+            ("latitude", "longitude"), ("index_1", "index_2"), "index_coatsu_1",
+        )}),
+        (_("Доставка"), {"fields": (
+            ("warehouse", "address_delivery_allowed"),
+            ("delivery_1", "delivery_2", "delivery_3", "delivery_4"),
+            ("delivery_5", "delivery_6", "delivery_7"),
+            "special_cash_check", "radius_home_delivery", "radius_express_pick_up", "radius_drop",
+        )}),
+    )
+
+    def get_search_results(self, request, queryset, search_term):
+        if connection.vendor == "sqlite" and search_term:
+            # SQLite REGEXP в Django использует Python re с поддержкой Unicode.
+            query = models.Q()
+            for field in self.search_fields:
+                if field != "ref":
+                    query |= models.Q(**{f"{field}__iregex": re.escape(search_term.strip())})
+            try:
+                from uuid import UUID
+                query |= models.Q(ref=UUID(search_term))
+            except ValueError:
+                pass
+            return queryset.filter(query), False
+        return super().get_search_results(request, queryset, search_term)
+
+    @action(
+        description=_("Обновить населённые пункты"),
+        icon="sync",
+        url_path="update-settlements",
+        permissions=["add", "change"],
+        dialog={
+            "title": _("Обновить населённые пункты Новой почты"),
+            "form_class": NovaPoshtaSettlementUpdateForm,
+            "form_submit_text": _("Обновить"),
+        },
+    )
+    def update_settlements(self, request, form):
+        try:
+            result = sync_settlements(area=form.cleaned_data["area"])
+        except NovaPoshtaError as exc:
+            self.message_user(request, str(exc), messages.ERROR)
+        else:
+            self.message_user(
+                request,
+                _("Населённые пункты обновлены. Загружено и сохранено: %(processed)s.")
+                % vars(result),
+                messages.SUCCESS,
+            )
+        url = reverse("admin:catalogs_novaposhtasettlement_changelist")
         if request.headers.get("HX-Request") == "true":
             return HttpResponse(headers={"HX-Redirect": url})
         return redirect(url)

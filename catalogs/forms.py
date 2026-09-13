@@ -15,3 +15,14 @@ class NovaPoshtaRegionUpdateForm(BaseDialogForm):
         help_text=_("Если область не выбрана, обновятся районы всех областей справочника."),
         widget=UnfoldAdminSelectWidget,
     )
+
+
+class NovaPoshtaSettlementUpdateForm(BaseDialogForm):
+    area = forms.ModelChoiceField(
+        label=_("Область"),
+        queryset=NovaPoshtaArea.objects.all(),
+        required=False,
+        empty_label=_("Все области"),
+        help_text=_("Без выбора области обновятся все населённые пункты. Загрузка может занять несколько минут."),
+        widget=UnfoldAdminSelectWidget,
+    )

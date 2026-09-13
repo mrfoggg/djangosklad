@@ -4,9 +4,10 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 from uuid import UUID
 
+from django.core.exceptions import ValidationError
 from django.db import transaction
 
-from .models import NovaPoshtaArea, NovaPoshtaRegion
+from .models import NovaPoshtaArea, NovaPoshtaRegion, NovaPoshtaSettlement
 
 
 class NovaPoshtaError(Exception):
@@ -138,3 +139,97 @@ def sync_regions(area=None):
             else:
                 unchanged += 1
     return AreaSyncResult(created, updated, unchanged)
+
+
+SETTLEMENT_FIELDS = {
+    "settlement_type": "SettlementType",
+    "description": "Description",
+    "description_ru": "DescriptionRu",
+    "description_translit": "DescriptionTranslit",
+    "settlement_type_description": "SettlementTypeDescription",
+    "settlement_type_description_ru": "SettlementTypeDescriptionRu",
+    "settlement_type_description_translit": "SettlementTypeDescriptionTranslit",
+    "latitude": "Latitude",
+    "longitude": "Longitude",
+    "index_1": "Index1",
+    "index_2": "Index2",
+    "index_coatsu_1": "IndexCOATSU1",
+    **{f"delivery_{day}": f"Delivery{day}" for day in range(1, 8)},
+    "special_cash_check": "SpecialCashCheck",
+    "radius_home_delivery": "RadiusHomeDelivery",
+    "radius_express_pick_up": "RadiusExpressPickUp",
+    "radius_drop": "RadiusDrop",
+    "warehouse": "Warehouse",
+    "address_delivery_allowed": "AddressDeliveryAllowed",
+}
+
+
+@dataclass(frozen=True)
+class SettlementSyncResult:
+    processed: int
+
+
+def _build_settlement(item, areas, regions, selected_area):
+    try:
+        ref = UUID(item["Ref"])
+        area_ref = UUID(item["Area"])
+        raw_region = item["Region"]
+        region_ref = UUID(raw_region) if raw_region else None
+        if region_ref and region_ref.int == 0:
+            region_ref = None
+        if area_ref not in areas:
+            raise NovaPoshtaError("Область отсутствует в базе. Обновите справочник областей.")
+        if selected_area is not None and area_ref != selected_area.ref:
+            raise NovaPoshtaError("API вернул населённый пункт другой области.")
+        if region_ref is not None and regions.get(region_ref) != area_ref:
+            raise NovaPoshtaError("Район отсутствует или относится к другой области. Обновите справочник районов.")
+        obj = NovaPoshtaSettlement(ref=ref, area_id=area_ref, region_id=region_ref)
+        for name, api_name in SETTLEMENT_FIELDS.items():
+            field = NovaPoshtaSettlement._meta.get_field(name)
+            value = item[api_name]
+            if field.null and value == "":
+                value = None
+            # Преобразование типов и проверка ограничений без запросов к БД.
+            setattr(obj, name, field.clean(value, obj))
+        return obj
+    except (KeyError, TypeError, ValueError, AttributeError, ValidationError) as exc:
+        raise NovaPoshtaError(
+            f"Некорректные данные населённого пункта: Ref={item.get('Ref', '?') if isinstance(item, dict) else '?'}."
+        ) from exc
+
+
+def sync_settlements(area=None):
+    """Постраничная загрузка и пакетная перезапись полей по Ref без удаления строк."""
+    areas = set(NovaPoshtaArea.objects.values_list("ref", flat=True))
+    if not areas:
+        raise NovaPoshtaError("Сначала обновите справочник областей Новой почты.")
+    regions = dict(NovaPoshtaRegion.objects.values_list("ref", "area_id"))
+    objects = []
+    seen = set()
+    limit = 150
+    for page in range(1, 1001):
+        properties = {"Page": str(page), "Limit": str(limit)}
+        if area is not None:
+            properties["AreaRef"] = str(area.ref)
+        data = _fetch_catalog("getSettlements", properties)
+        for item in data:
+            obj = _build_settlement(item, areas, regions, area)
+            if obj.ref in seen:
+                raise NovaPoshtaError("API вернул повторяющиеся населённые пункты. Обновление отменено.")
+            seen.add(obj.ref)
+            objects.append(obj)
+        if len(data) < limit:
+            break
+    else:
+        raise NovaPoshtaError("Превышен лимит страниц справочника населённых пунктов.")
+
+    # Ни одной записи до полной загрузки и проверки всех страниц.
+    with transaction.atomic():
+        NovaPoshtaSettlement.objects.bulk_create(
+            objects,
+            batch_size=500,
+            update_conflicts=True,
+            unique_fields=["ref"],
+            update_fields=["area", "region", *SETTLEMENT_FIELDS],
+        )
+    return SettlementSyncResult(processed=len(objects))
