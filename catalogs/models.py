@@ -650,6 +650,19 @@ class RetailStore(BaseModel):
         super().save(*args, **kwargs)
 
 
+class NovaPoshtaArea(models.Model):
+    ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
+    description = models.CharField(max_length=255, verbose_name=_("Название"))
+
+    class Meta:
+        verbose_name = _("Новая почта: область")
+        verbose_name_plural = _("Новая почта: области")
+        ordering = ("description",)
+
+    def __str__(self):
+        return self.description
+
+
 class DeliveryMethod(BaseModel):
     class Kind(models.TextChoices):
         CARRIER = "carrier", _("Перевозчик")

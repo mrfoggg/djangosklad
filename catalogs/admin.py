@@ -16,6 +16,7 @@ from .models import (
     ContractorLegalDetails,
     ContractorLink,
     MeasurementUnit,
+    NovaPoshtaArea,
     Organization,
     OurBankAccount,
     Product,
@@ -27,6 +28,12 @@ from .models import (
 )
 
 BASE_READONLY_DATES = ("created", "updated")
+
+
+@admin.register(NovaPoshtaArea)
+class NovaPoshtaAreaAdmin(ModelAdmin):
+    list_display = ("description", "ref")
+    search_fields = ("description", "ref")
 
 
 class BaseCatalogAdmin(ModelAdmin):
