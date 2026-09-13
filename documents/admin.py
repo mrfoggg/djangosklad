@@ -41,6 +41,7 @@ from .models import (
 from .receipts import receipt_order_items
 from .invoices import invoice_order_items, with_invoice_balance
 from .order_lines import with_order_position
+from .order_summary import supplier_order_summary
 
 
 BASE_READONLY_DATES = ("created", "updated")
@@ -1029,6 +1030,7 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
         "order_total",
         "order_quantity",
         "product_count",
+        "linked_invoices", "linked_receipts", "delivery_summary", "payment_summary",
     )
     list_display = (
         "id",
@@ -1043,6 +1045,91 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
     list_display_links = ("id", "supplier")
     list_filter = ("is_applied", "supplier")
     inlines = [PurchaseOrderItemInline]
+
+    fields = BASE_FIELDS + (
+        "supplier", "price_type", "comment",
+        ("order_total", "order_quantity", "product_count"),
+        "linked_invoices", "linked_receipts", "delivery_summary", "payment_summary",
+    )
+
+    @staticmethod
+    def _summary(obj):
+        if not hasattr(obj, "_supplier_order_summary"):
+            obj._supplier_order_summary = supplier_order_summary(obj)
+        return obj._supplier_order_summary
+
+    @staticmethod
+    def _money(value):
+        if value is None:
+            return _("Не определено: не заполнены цены")
+        return _("%(amount)s грн") % {"amount": number_format(value, decimal_pos=2, use_l10n=True)}
+
+    @staticmethod
+    def _document_links(documents, model_name, number_field, date_field):
+        entries = []
+        for document in documents:
+            number = getattr(document, number_field) or "—"
+            date = getattr(document, date_field)
+            label = f"№{document.pk} · Документ поставщика: {number}"
+            if date:
+                label += f" от {date:%d.%m.%Y}"
+            status = _("Проведён") if document.is_applied else _("Черновик")
+            entries.append((reverse(f"admin:documents_{model_name}_change", args=[document.pk]), label, status))
+        return format_html_join("", '<div><a href="{}">{}</a> — {}</div>', entries) or "—"
+
+    @admin.display(description=_("Связанные счета"))
+    def linked_invoices(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        return self._document_links(self._summary(obj)["invoices"], "purchaseinvoice",
+                                    "supplier_invoice_number", "supplier_invoice_date")
+
+    @admin.display(description=_("Связанные поступления"))
+    def linked_receipts(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        return self._document_links(self._summary(obj)["receipts"], "goodsreceipt",
+                                    "supplier_delivery_note_number", "supplier_delivery_note_date")
+
+    @admin.display(description=_("Итоги поставки"))
+    def delivery_summary(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        summary = self._summary(obj)
+        rows = []
+        for kind, label in (("ordered", _("Заказано")), ("received", _("Поставлено")), ("pending", _("Ожидается"))):
+            quantities = "; ".join(
+                f'{number_format(group[kind], decimal_pos=group["places"], use_l10n=True)} {group["symbol"]}'
+                for group in summary["quantities"]
+            ) or "0"
+            rows.append((label, quantities, self._money(summary["amounts"][kind])))
+        return format_html(
+            '{}<div>Учитываются только проведённые поступления.</div>',
+            format_html_join("", '<div><strong>{}:</strong> {} · {}</div>', rows),
+        )
+
+    @admin.display(description=_("Итоги оплаты заказа"))
+    def payment_summary(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        summary = self._summary(obj)
+        balance = summary["balance"]
+        if not summary["quantities"]:
+            status = _("В заказе нет позиций")
+        elif balance is None:
+            status = _("Статус оплаты не определён")
+        elif balance > 0:
+            status = _("Не оплачено по заказу: %(amount)s") % {"amount": self._money(balance)}
+        elif balance < 0:
+            status = _("Переплата по заказу: %(amount)s") % {"amount": self._money(-balance)}
+        else:
+            status = _("Заказ оплачен полностью")
+        note = _("Учтены только проведённые платежи, распределённые по связанным счетам. Комиссия банка не учитывается.")
+        if summary["estimated"]:
+            note += _(" Для общих счетов оплата заказа рассчитана пропорционально стоимости его строк в счёте.")
+        paid = self._money(summary["paid"]) if summary["paid"] is not None else _("Не удалось распределить оплату общего счёта")
+        return format_html('<div><strong>Оплачено{}:</strong> {}</div><div>{}</div><div>{}</div>',
+                           _(" (расчётно)") if summary["estimated"] else "", paid, status, note)
 
     class Media:
         js = [
