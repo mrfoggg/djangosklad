@@ -1282,8 +1282,23 @@ class SalesDocument(BaseDocumentModel):
             ids.append(holding_id)
         return ids
 
+    def validate_shipment_lock(self):
+        if not self.pk or not self.shipments.filter(is_applied=True).exists():
+            return
+        previous = type(self).objects.get(pk=self.pk)
+        fields = ("is_applied", "dt_applied", "customer_id", "organization_id", "to_remove")
+        if getattr(self, "_force_current_date", False) or any(
+            getattr(self, field) != getattr(previous, field) for field in fields
+        ):
+            raise ValidationError(_("Сначала снимите проведение связанных отгрузок."))
+
+    def save(self, *args, **kwargs):
+        self.validate_shipment_lock()
+        super().save(*args, **kwargs)
+
     def clean(self):
         super().clean()
+        self.validate_shipment_lock()
         order_ids = getattr(self, "_selected_order_ids", None)
         if order_ids is None:
             order_ids = self.orders.values_list("pk", flat=True) if self.pk else []
@@ -1326,8 +1341,20 @@ class SalesDocumentItem(models.Model):
 
     sort_order = models.PositiveIntegerField(_("Порядок"), default=0, db_index=True)
 
+    def validate_shipment_lock(self):
+        if not self.pk or not self.shipment_items.filter(shipment__is_applied=True).exists():
+            return
+        previous = type(self).objects.get(pk=self.pk)
+        if any(getattr(self, field) != getattr(previous, field) for field in ("document_id", "order_item_id", "quantity")):
+            raise ValidationError(_("Строка связана с проведённой отгрузкой. Сначала снимите проведение отгрузки."))
+
+    def save(self, *args, **kwargs):
+        self.validate_shipment_lock()
+        super().save(*args, **kwargs)
+
     def clean(self):
         super().clean()
+        self.validate_shipment_lock()
         if not self.order_item_id:
             return
         item = self.order_item
@@ -1361,3 +1388,105 @@ class SalesDocumentItem(models.Model):
 
     def __str__(self):
         return str(self.order_item)
+
+
+class Shipment(BaseDocumentModel):
+    class Status(models.TextChoices):
+        PREPARING = "preparing", _("Готовится")
+        HANDED = "handed", _("Передано")
+        DELIVERED = "delivered", _("Доставлено")
+        RETURNED = "returned", _("Возвращено")
+
+    class Destination(models.TextChoices):
+        BRANCH = "branch", _("Отделение / почтомат")
+        ADDRESS = "address", _("Адрес")
+
+    sales_document = models.ForeignKey(
+        SalesDocument, on_delete=models.PROTECT, related_name="shipments", verbose_name=_("Основание: Реализация"),
+    )
+    delivery_method = models.ForeignKey("catalogs.DeliveryMethod", on_delete=models.PROTECT, verbose_name=_("Способ доставки"))
+    status = models.CharField(_("Статус доставки"), max_length=20, choices=Status.choices, default=Status.PREPARING)
+    recipient_name = models.CharField(_("Получатель"), max_length=255, blank=True)
+    recipient_phone = models.CharField(_("Телефон получателя"), max_length=50, blank=True)
+    shipment_date = models.DateField(_("Дата отгрузки"), blank=True, null=True)
+    destination = models.CharField(_("Куда доставить"), max_length=20, choices=Destination.choices, default=Destination.BRANCH)
+    city = models.CharField(_("Город доставки"), max_length=150, blank=True)
+    branch = models.CharField(_("Отделение / почтомат"), max_length=255, blank=True)
+    address = models.CharField(_("Адрес доставки"), max_length=255, blank=True)
+    tracking_number = models.CharField(_("Номер ТТН"), max_length=100, blank=True)
+    pickup_location = models.CharField(_("Место самовывоза"), max_length=255, blank=True)
+    received_by = models.CharField(_("Кто получил"), max_length=255, blank=True)
+    handover_confirmed = models.BooleanField(_("Передача получателю подтверждена"), default=False)
+    comment = models.TextField(_("Комментарий"), blank=True)
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.sales_document_id:
+            if not self.sales_document.is_applied or self.sales_document.to_remove:
+                errors["sales_document"] = _("Выберите проведённую реализацию без пометки на удаление.")
+            if self.organization_id != self.sales_document.organization_id:
+                errors["organization"] = _("Организация должна совпадать с реализацией.")
+        if self.is_applied:
+            if self.to_remove:
+                errors["to_remove"] = _("Проведённую отгрузку нельзя пометить на удаление.")
+            required = ["recipient_name", "shipment_date"]
+            if self.status == self.Status.PREPARING:
+                errors["status"] = _("Для проведения укажите статус передачи или доставки.")
+            if self.delivery_method_id:
+                if self.delivery_method.kind == "carrier":
+                    required += ["recipient_phone", "city", "tracking_number"]
+                    required += ["address" if self.destination == self.Destination.ADDRESS else "branch"]
+                else:
+                    required += ["pickup_location"]
+                    if not self.handover_confirmed:
+                        errors["handover_confirmed"] = _("Подтвердите передачу получателю.")
+                    required += ["received_by"]
+            for field in required:
+                if not getattr(self, field):
+                    errors[field] = _("Заполните поле для проведения отгрузки.")
+        if errors:
+            raise ValidationError(errors)
+
+    class Meta:
+        verbose_name = _("Отгрузка")
+        verbose_name_plural = _("Отгрузки")
+
+    def __str__(self):
+        return f"Отгрузка №{self.pk or '—'}"
+
+
+class ShipmentItem(models.Model):
+    shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE, related_name="items")
+    sales_item = models.ForeignKey(
+        SalesDocumentItem, on_delete=models.PROTECT, related_name="shipment_items", verbose_name=_("Строка реализации"),
+    )
+    quantity = models.DecimalField(
+        _("Количество"), max_digits=14, decimal_places=6,
+        validators=[MinValueValidator(Decimal("0.000001"))],
+    )
+    sort_order = models.PositiveIntegerField(_("Порядок"), default=0, db_index=True)
+
+    def clean(self):
+        super().clean()
+        if not self.sales_item_id:
+            return
+        if self.quantity is not None:
+            places = max(0, -Decimal(self.quantity).normalize().as_tuple().exponent)
+            if places > self.sales_item.order_item.product.unit.decimal_places:
+                raise ValidationError({"quantity": _("Количество не соответствует точности единицы измерения.")})
+        if self.shipment_id or "shipment" in self._state.fields_cache:
+            if self.shipment.sales_document_id != self.sales_item.document_id:
+                raise ValidationError({"sales_item": _("Строка не принадлежит выбранной реализации.")})
+
+    class Meta:
+        verbose_name = _("Позиция отгрузки")
+        verbose_name_plural = _("Позиции отгрузки")
+        ordering = ("sort_order", "pk")
+        constraints = [
+            models.UniqueConstraint(fields=("shipment", "sales_item"), name="unique_shipment_sales_item"),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name="shipment_quantity_positive"),
+        ]
+
+    def __str__(self):
+        return str(self.sales_item)

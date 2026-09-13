@@ -2318,6 +2318,7 @@ class SalesDocumentForm(DocumentForm):
 
     def clean(self):
         data = super().clean()
+        self.instance._force_current_date = bool(data.get("force_current_date"))
         self.instance._selected_order_ids = [order.pk for order in data.get("orders", [])]
         return data
 
@@ -2455,10 +2456,10 @@ class SalesDocumentAdmin(SourceOrderAdminMixin, OrderTotalsAdminMixin, BaseDocum
     product_field = "items__order_item__product"
     fields = BASE_FIELDS + (
         "customer", ("delivery_note_number", "delivery_note_date"),
-        "orders", "fill_from_order",
+        "orders", "fill_from_order", "linked_shipments",
         ("order_total", "order_quantity", "product_count"), "comment",
     )
-    readonly_fields = BASE_READONLY + ("order_total", "order_quantity", "product_count")
+    readonly_fields = BASE_READONLY + ("order_total", "order_quantity", "product_count", "linked_shipments")
     list_display = (
         "id", "delivery_note_number", "delivery_note_date", "customer",
         "organization", "order_total", "is_applied",
@@ -2469,9 +2470,36 @@ class SalesDocumentAdmin(SourceOrderAdminMixin, OrderTotalsAdminMixin, BaseDocum
     inlines = (SalesDocumentItemInline,)
     filter_horizontal = ("orders",)
 
+    actions_detail = ["create_shipment"]
+
+    def has_create_shipment_permission(self, request, object_id=None):
+        from .models import Shipment
+        sale = self.get_object(request, object_id) if object_id else None
+        return bool(sale and sale.is_applied and not sale.to_remove and self.has_view_permission(request, sale)
+                    and self.admin_site._registry[Shipment].has_add_permission(request))
+
+    @action(description=_("Создать отгрузку"), permissions=["create_shipment"])
+    def create_shipment(self, request, object_id):
+        url = reverse("admin:documents_shipment_add")
+        return HttpResponseRedirect(f"{url}?{urlencode({'sales_document': object_id})}")
+
+    @admin.display(description=_("Связанные отгрузки"))
+    def linked_shipments(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        return format_html_join(
+            "", '<div><a href="{}">Отгрузка №{}</a> · {} · {}</div>',
+            ((reverse("admin:documents_shipment_change", args=[row.pk]), row.pk,
+              row.delivery_method, row.get_status_display()) for row in obj.shipments.select_related("delivery_method")),
+        ) or "—"
+
     class Media:
         js = [
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
             "documents/js/admin_sortable_init.js?v=3",
             "documents/js/admin_quantity_step.js",
         ]
+
+
+# Registered after the shared document admin helpers are defined.
+from .shipment_admin import ShipmentAdmin

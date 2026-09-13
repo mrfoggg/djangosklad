@@ -648,3 +648,20 @@ class RetailStore(BaseModel):
                 is_default=False
             )
         super().save(*args, **kwargs)
+
+
+class DeliveryMethod(BaseModel):
+    class Kind(models.TextChoices):
+        CARRIER = "carrier", _("Перевозчик")
+        PICKUP = "pickup", _("Самовывоз")
+
+    name = models.CharField(_("Название"), max_length=100, unique=True)
+    kind = models.CharField(_("Тип доставки"), max_length=20, choices=Kind.choices, default=Kind.CARRIER)
+
+    class Meta:
+        verbose_name = _("Способ доставки")
+        verbose_name_plural = _("Способы доставки")
+        ordering = ("name",)
+
+    def __str__(self):
+        return self.name

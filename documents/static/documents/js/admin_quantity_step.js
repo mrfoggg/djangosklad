@@ -36,7 +36,7 @@ function applyProductQuantityPrecision(productSelect) {
 		decimalPlaces === 0 ? "1" : `0.${"0".repeat(decimalPlaces - 1)}1`;
 	quantityInput.dataset.unitSymbol = selectedOption?.dataset.unitSymbol ?? "";
 	formatQuantityForPrecision(quantityInput, decimalPlaces);
-	if (productSelect.matches('select[id$="-order_item"]')) {
+	if (productSelect.matches('select[id$="-order_item"], select[id$="-sales_item"]')) {
 		let unitLabel = quantityInput.parentNode.querySelector(".quantity-unit-label");
 		if (!unitLabel) {
 			unitLabel = document.createElement("span");
@@ -48,11 +48,11 @@ function applyProductQuantityPrecision(productSelect) {
 }
 
 function initializeProductQuantityPrecision(root = document) {
-	root.querySelectorAll?.('select[id$="-product"], select[id$="-order_item"]').forEach(applyProductQuantityPrecision);
+	root.querySelectorAll?.('select[id$="-product"], select[id$="-order_item"], select[id$="-sales_item"]').forEach(applyProductQuantityPrecision);
 }
 
 document.addEventListener("change", (event) => {
-	if (event.target?.matches('select[id$="-product"], select[id$="-order_item"]')) {
+	if (event.target?.matches('select[id$="-product"], select[id$="-order_item"], select[id$="-sales_item"]')) {
 		applyProductQuantityPrecision(event.target);
 	}
 });

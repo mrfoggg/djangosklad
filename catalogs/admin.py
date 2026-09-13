@@ -382,3 +382,13 @@ class RetailStoreAdmin(BaseCatalogAdmin):
     list_display = ("name", "url", "description", "is_default")
     list_editable = ("is_default",)
     search_fields = ("name", "description")
+
+
+from .models import DeliveryMethod
+
+
+@admin.register(DeliveryMethod)
+class DeliveryMethodAdmin(BaseCatalogAdmin):
+    list_display = ("name", "kind")
+    list_filter = ("kind",)
+    search_fields = ("name",)
