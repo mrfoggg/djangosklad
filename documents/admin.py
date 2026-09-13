@@ -1253,7 +1253,7 @@ class PurchaseOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
         js = [
             "https://cdn.jsdelivr.net/npm/sweetalert2@11",
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
-            "documents/js/admin_price_fetch.js",
+            "documents/js/admin_price_fetch.js?v=2",
             "documents/js/admin_quantity_step.js",
             "documents/js/admin_sortable_init.js?v=2",
         ]
@@ -1303,7 +1303,7 @@ class CustomerOrderAdmin(OrderTotalsAdminMixin, BaseDocumentAdmin):
         js = [
             "https://cdn.jsdelivr.net/npm/sweetalert2@11",
             "https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js",
-            "documents/js/admin_price_fetch.js",
+            "documents/js/admin_price_fetch.js?v=2",
             "documents/js/admin_quantity_step.js",
             "documents/js/admin_sortable_init.js?v=2",
         ]

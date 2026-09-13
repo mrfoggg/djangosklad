@@ -216,7 +216,7 @@ document.addEventListener("change", async (event) => {
 		event.target?.id.endsWith("-organization") && !isDocumentOrganizationChanged;
 	const shouldBatchUpdate =
 		(!priceSource.isRetail &&
-			(isSupplierChanged || isDocumentOrganizationChanged || isPriceTypeChanged)) ||
+			(isSupplierChanged || isPriceTypeChanged)) ||
 		(priceSource.isRetail && isRetailStoreChanged);
 
 	if (shouldBatchUpdate) {
@@ -225,18 +225,7 @@ document.addEventListener("change", async (event) => {
 		}
 
 		const productSelects = [...document.querySelectorAll('select[id$="-product"]')].filter(
-			(productSelect) => {
-				if (!productSelect.value) {
-					return false;
-				}
-
-				if (!isDocumentOrganizationChanged || priceSource.isRetail) {
-					return true;
-				}
-
-				const row = productSelect.closest("tr, .inline-related");
-				return !row?.querySelector('select[id$="-organization"]')?.value;
-			},
+			(productSelect) => Boolean(productSelect.value),
 		);
 		const results = await Promise.all(
 			productSelects.map((productSelect) =>
