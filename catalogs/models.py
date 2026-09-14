@@ -683,6 +683,20 @@ class NovaPoshtaRegion(models.Model):
         return self.description
 
 
+class NovaPoshtaSettlementType(models.Model):
+    ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
+    description = models.CharField(max_length=100, verbose_name=_("Название"))
+    code = models.CharField(max_length=20, blank=True, verbose_name=_("Сокращение"))
+
+    class Meta:
+        verbose_name = _("Новая почта: тип населённого пункта")
+        verbose_name_plural = _("Новая почта: типы населённых пунктов")
+        ordering = ("description",)
+
+    def __str__(self):
+        return self.description
+
+
 class NovaPoshtaSettlement(models.Model):
     ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
     area = models.ForeignKey(
@@ -693,7 +707,10 @@ class NovaPoshtaSettlement(models.Model):
         NovaPoshtaRegion, on_delete=models.PROTECT, null=True, blank=True,
         related_name="settlements", verbose_name=_("Район"),
     )
-    settlement_type = models.UUIDField(verbose_name=_("Ref типа населённого пункта"))
+    settlement_type = models.ForeignKey(
+        NovaPoshtaSettlementType, on_delete=models.PROTECT,
+        related_name="settlements", verbose_name=_("Тип населённого пункта"),
+    )
     description = models.CharField(max_length=255, verbose_name=_("Название"))
     description_ru = models.CharField(max_length=255, blank=True, verbose_name=_("Название на русском"))
     description_translit = models.CharField(max_length=255, blank=True, verbose_name=_("Название латиницей"))

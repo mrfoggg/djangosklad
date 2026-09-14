@@ -14,7 +14,7 @@ from unfold.contrib.forms.widgets import WysiwygWidget
 from unfold.decorators import action
 
 from .forms import NovaPoshtaRegionUpdateForm, NovaPoshtaSettlementUpdateForm
-from .nova_poshta import NovaPoshtaError, sync_areas, sync_regions, sync_settlements
+from .nova_poshta import NovaPoshtaError, sync_areas, sync_regions, sync_settlements, sync_settlement_types
 
 from .models import (
     Brand,
@@ -28,6 +28,7 @@ from .models import (
     NovaPoshtaArea,
     NovaPoshtaRegion,
     NovaPoshtaSettlement,
+    NovaPoshtaSettlementType,
     Organization,
     OurBankAccount,
     Product,
@@ -129,11 +130,42 @@ class NovaPoshtaRegionAdmin(ModelAdmin):
         return redirect(url)
 
 
+@admin.register(NovaPoshtaSettlementType)
+class NovaPoshtaSettlementTypeAdmin(ModelAdmin):
+    list_display = ("description", "code", "ref")
+    search_fields = ("description", "code", "ref")
+    actions_list = ("update_settlement_types",)
+
+    @action(
+        description=_("Обновить типы населённых пунктов"),
+        icon="sync", url_path="update-settlement-types", permissions=["add", "change"],
+        dialog={
+            "title": _("Обновить типы населённых пунктов"),
+            "form_submit_text": _("Обновить"),
+        },
+    )
+    def update_settlement_types(self, request, form):
+        try:
+            result = sync_settlement_types()
+        except NovaPoshtaError as exc:
+            self.message_user(request, str(exc), messages.ERROR)
+        else:
+            self.message_user(
+                request,
+                _("Типы обновлены. Добавлено: %(created)s, изменено: %(updated)s, без изменений: %(unchanged)s.") % vars(result),
+                messages.SUCCESS,
+            )
+        url = reverse("admin:catalogs_novaposhtasettlementtype_changelist")
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponse(headers={"HX-Redirect": url})
+        return redirect(url)
+
+
 @admin.register(NovaPoshtaSettlement)
 class NovaPoshtaSettlementAdmin(ModelAdmin):
-    list_display = ("description", "settlement_type_description", "area", "region", "warehouse", "address_delivery_allowed")
-    list_filter = ("area", "warehouse", "address_delivery_allowed")
-    list_select_related = ("area", "region")
+    list_display = ("description", "settlement_type", "area", "region", "warehouse", "address_delivery_allowed")
+    list_filter = ("area", "settlement_type", "warehouse", "address_delivery_allowed")
+    list_select_related = ("area", "region", "settlement_type")
     search_fields = ("description", "description_ru", "description_translit", "ref")
     autocomplete_fields = ("area", "region")
     actions_list = ("update_settlements",)

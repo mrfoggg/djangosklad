@@ -10,7 +10,7 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from .models import NovaPoshtaArea, NovaPoshtaRegion, NovaPoshtaSettlement
+from .models import NovaPoshtaArea, NovaPoshtaRegion, NovaPoshtaSettlement, NovaPoshtaSettlementType
 from .nova_poshta import NovaPoshtaError, SettlementSyncResult, sync_settlements
 
 
@@ -25,6 +25,9 @@ class SettlementDataMixin:
         )
         self.area.refresh_from_db()
         self.region.refresh_from_db()
+        NovaPoshtaSettlementType.objects.create(
+            ref=self.item["SettlementType"], description="село", code="с."
+        )
 
 
 class SettlementSyncTests(SettlementDataMixin, TestCase):

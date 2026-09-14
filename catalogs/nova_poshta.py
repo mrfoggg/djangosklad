@@ -7,7 +7,7 @@ from uuid import UUID
 from django.core.exceptions import ValidationError
 from django.db import transaction
 
-from .models import NovaPoshtaArea, NovaPoshtaRegion, NovaPoshtaSettlement
+from .models import NovaPoshtaArea, NovaPoshtaRegion, NovaPoshtaSettlement, NovaPoshtaSettlementType
 
 
 class NovaPoshtaError(Exception):
@@ -142,7 +142,6 @@ def sync_regions(area=None):
 
 
 SETTLEMENT_FIELDS = {
-    "settlement_type": "SettlementType",
     "description": "Description",
     "description_ru": "DescriptionRu",
     "description_translit": "DescriptionTranslit",
@@ -169,10 +168,13 @@ class SettlementSyncResult:
     processed: int
 
 
-def _build_settlement(item, areas, regions, selected_area):
+def _build_settlement(item, areas, regions, selected_area, settlement_types):
     try:
         ref = UUID(item["Ref"])
         area_ref = UUID(item["Area"])
+        type_ref = UUID(item["SettlementType"])
+        if type_ref not in settlement_types:
+            raise NovaPoshtaError("Тип населённого пункта отсутствует. Обновите справочник типов населённых пунктов.")
         raw_region = item["Region"]
         region_ref = UUID(raw_region) if raw_region else None
         if region_ref and region_ref.int == 0:
@@ -183,7 +185,7 @@ def _build_settlement(item, areas, regions, selected_area):
             raise NovaPoshtaError("API вернул населённый пункт другой области.")
         if region_ref is not None and regions.get(region_ref) != area_ref:
             raise NovaPoshtaError("Район отсутствует или относится к другой области. Обновите справочник районов.")
-        obj = NovaPoshtaSettlement(ref=ref, area_id=area_ref, region_id=region_ref)
+        obj = NovaPoshtaSettlement(ref=ref, area_id=area_ref, region_id=region_ref, settlement_type_id=type_ref)
         for name, api_name in SETTLEMENT_FIELDS.items():
             field = NovaPoshtaSettlement._meta.get_field(name)
             value = item[api_name]
@@ -204,6 +206,7 @@ def sync_settlements(area=None):
     if not areas:
         raise NovaPoshtaError("Сначала обновите справочник областей Новой почты.")
     regions = dict(NovaPoshtaRegion.objects.values_list("ref", "area_id"))
+    settlement_types = set(NovaPoshtaSettlementType.objects.values_list("ref", flat=True))
     objects = []
     seen = set()
     limit = 150
@@ -213,7 +216,7 @@ def sync_settlements(area=None):
             properties["AreaRef"] = str(area.ref)
         data = _fetch_catalog("getSettlements", properties)
         for item in data:
-            obj = _build_settlement(item, areas, regions, area)
+            obj = _build_settlement(item, areas, regions, area, settlement_types)
             if obj.ref in seen:
                 raise NovaPoshtaError("API вернул повторяющиеся населённые пункты. Обновление отменено.")
             seen.add(obj.ref)
@@ -230,6 +233,39 @@ def sync_settlements(area=None):
             batch_size=500,
             update_conflicts=True,
             unique_fields=["ref"],
-            update_fields=["area", "region", *SETTLEMENT_FIELDS],
+            update_fields=["area", "region", "settlement_type", *SETTLEMENT_FIELDS],
         )
     return SettlementSyncResult(processed=len(objects))
+
+
+def sync_settlement_types():
+    data = _fetch_catalog("getSettlementTypes", {})
+    if not data:
+        raise NovaPoshtaError("Новая почта вернула пустой справочник типов населённых пунктов.")
+    objects = {}
+    try:
+        for item in data:
+            obj = NovaPoshtaSettlementType(
+                ref=UUID(item["Ref"]), description=item["Description"], code=item["Code"]
+            )
+            obj.clean_fields()
+            if obj.ref in objects:
+                raise ValueError("Duplicate ref")
+            objects[obj.ref] = obj
+    except (KeyError, TypeError, ValueError, AttributeError, ValidationError) as exc:
+        raise NovaPoshtaError("Некорректные данные типа населённого пункта в ответе Новой почты.") from exc
+    created = updated = unchanged = 0
+    with transaction.atomic():
+        for ref, obj in objects.items():
+            current, is_new = NovaPoshtaSettlementType.objects.get_or_create(
+                ref=ref, defaults={"description": obj.description, "code": obj.code}
+            )
+            if is_new:
+                created += 1
+            elif (current.description, current.code) != (obj.description, obj.code):
+                current.description, current.code = obj.description, obj.code
+                current.save(update_fields=["description", "code"])
+                updated += 1
+            else:
+                unchanged += 1
+    return AreaSyncResult(created, updated, unchanged)
