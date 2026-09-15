@@ -2,7 +2,7 @@ import re
 
 from django import forms
 from django.contrib import admin, messages
-from django.http import HttpResponse
+from django.http import HttpResponse, Http404
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.db import connection, models
@@ -14,6 +14,7 @@ from unfold.contrib.forms.widgets import WysiwygWidget
 from unfold.decorators import action
 
 from .forms import NovaPoshtaRegionUpdateForm, NovaPoshtaSettlementUpdateForm
+from .nova_poshta import sync_settlement_details
 from .nova_poshta import NovaPoshtaError, sync_areas, sync_regions, sync_settlements, sync_settlement_types
 
 from .models import (
@@ -28,6 +29,7 @@ from .models import (
     NovaPoshtaArea,
     NovaPoshtaRegion,
     NovaPoshtaSettlement,
+    NovaPoshtaSettlementDetails,
     NovaPoshtaSettlementType,
     Organization,
     OurBankAccount,
@@ -194,6 +196,29 @@ class NovaPoshtaSettlementTypeAdmin(NovaPoshtaCatalogAdmin):
         return redirect(url)
 
 
+class NovaPoshtaSettlementDetailsInline(StackedInline):
+    model = NovaPoshtaSettlementDetails
+    extra = 0
+    can_delete = False
+    readonly_fields = tuple(
+        field.name for field in NovaPoshtaSettlementDetails._meta.fields
+        if field.name != "settlement"
+    )
+    fields = readonly_fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.has_perm("catalogs.view_novaposhtasettlement") or request.user.has_perm("catalogs.change_novaposhtasettlement")
+
+
 @admin.register(NovaPoshtaSettlement)
 class NovaPoshtaSettlementAdmin(NovaPoshtaCatalogAdmin):
     list_display = ("description", "settlement_type", "area", "region", "warehouse", "address_delivery_allowed")
@@ -202,6 +227,35 @@ class NovaPoshtaSettlementAdmin(NovaPoshtaCatalogAdmin):
     search_fields = ("description", "description_ru", "description_translit", "ref")
     autocomplete_fields = ("area", "region")
     actions_list = ("update_settlements",)
+    actions_detail = ("update_details",)
+    inlines = (NovaPoshtaSettlementDetailsInline,)
+
+    def has_update_details_permission(self, request, object_id=None):
+        return request.user.has_perm("catalogs.change_novaposhtasettlement")
+
+    @action(
+        description=_("Обновить допданные"), icon="sync",
+        url_path="update-details", permissions=["update_details"],
+        dialog={
+            "title": _("Обновить допданные населённого пункта"),
+            "description": _("Получить сведения о доставке, доступности справочника улиц и городе доставки из Новой почты."),
+            "form_submit_text": _("Обновить"),
+        },
+    )
+    def update_details(self, request, form, object_id):
+        settlement = self.get_object(request, object_id)
+        if settlement is None:
+            raise Http404
+        try:
+            sync_settlement_details(settlement)
+        except NovaPoshtaError as exc:
+            self.message_user(request, str(exc), messages.ERROR)
+        else:
+            self.message_user(request, _("Допданные обновлены."), messages.SUCCESS)
+        url = reverse("admin:catalogs_novaposhtasettlement_change", args=[settlement.pk])
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponse(headers={"HX-Redirect": url})
+        return redirect(url)
     fieldsets = (
         (_("Населённый пункт"), {"fields": (
             "ref", ("area", "region"), "description", "description_ru", "description_translit",

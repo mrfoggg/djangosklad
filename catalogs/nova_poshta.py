@@ -7,12 +7,54 @@ from uuid import UUID
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
+from .models import NovaPoshtaSettlementDetails
 
 from .models import NovaPoshtaArea, NovaPoshtaRegion, NovaPoshtaSettlement, NovaPoshtaSettlementType
 
 
 class NovaPoshtaError(Exception):
     """Ошибка загрузки справочника Новой почты."""
+
+
+def sync_settlement_details(settlement):
+    data = _fetch_catalog("searchSettlements", {
+        "SettlementRef": str(settlement.ref), "Page": "1", "Limit": "20",
+    })
+    try:
+        addresses = [address for group in data for address in group["Addresses"]]
+        matches = [item for item in addresses if UUID(item["Ref"]) == settlement.ref]
+        if len(matches) != 1:
+            raise ValueError("Settlement not found or ambiguous")
+        address = matches[0]
+        city_ref = UUID(address["DeliveryCity"])
+        cities = _fetch_catalog("getCities", {"Ref": str(city_ref), "Page": "1", "Limit": "20"})
+        matches = [item for item in cities if UUID(item["Ref"]) == city_ref]
+        if len(matches) != 1:
+            raise ValueError("Delivery city not found or ambiguous")
+        city = matches[0]
+        values = {
+            "address_delivery_allowed": address["AddressDeliveryAllowed"],
+            "streets_availability": address["StreetsAvailability"],
+            "delivery_city_ref": city_ref,
+            "description": city["Description"],
+            "settlement_type": city["SettlementType"],
+            "settlement_type_description": city["SettlementTypeDescription"],
+            "prevent_entry_new_streets_user": city["PreventEntryNewStreetsUser"],
+            "city_id": city["CityID"],
+            "special_cash_check": city["SpecialCashCheck"],
+            "area_description": city["AreaDescription"],
+            **{f"delivery_{day}": city[f"Delivery{day}"] for day in range(1, 8)},
+        }
+        obj = NovaPoshtaSettlementDetails(settlement=settlement)
+        for name, value in values.items():
+            values[name] = obj._meta.get_field(name).clean(value, obj)
+    except (KeyError, TypeError, ValueError, AttributeError, ValidationError) as exc:
+        raise NovaPoshtaError("Не удалось получить корректные допданные населённого пункта и города доставки.") from exc
+    with transaction.atomic():
+        details, _created = NovaPoshtaSettlementDetails.objects.update_or_create(
+            settlement=settlement, defaults=values,
+        )
+    return details
 
 
 @dataclass(frozen=True)

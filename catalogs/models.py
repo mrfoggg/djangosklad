@@ -765,6 +765,37 @@ class NovaPoshtaSettlement(NovaPoshtaCatalog):
             raise ValidationError({"region": _("Район не относится к выбранной области.")})
 
 
+class NovaPoshtaSettlementDetails(BaseModel):
+    settlement = models.OneToOneField(
+        NovaPoshtaSettlement, primary_key=True, on_delete=models.CASCADE,
+        related_name="details", verbose_name=_("Населённый пункт"),
+    )
+    address_delivery_allowed = models.BooleanField(verbose_name=_("Адресная доставка доступна"))
+    streets_availability = models.BooleanField(verbose_name=_("Улицы доступны"))
+    delivery_city_ref = models.UUIDField(verbose_name=_("Ref города доставки"))
+    description = models.CharField(max_length=255, verbose_name=_("Город доставки"))
+    settlement_type = models.UUIDField(verbose_name=_("Ref типа города доставки"))
+    settlement_type_description = models.CharField(max_length=100, verbose_name=_("Тип города доставки"))
+    prevent_entry_new_streets_user = models.BooleanField(verbose_name=_("Запрет ввода новых улиц"))
+    city_id = models.CharField(max_length=30, verbose_name=_("CityID"))
+    special_cash_check = models.BooleanField(verbose_name=_("SpecialCashCheck"))
+    area_description = models.CharField(max_length=255, verbose_name=_("Область города доставки"))
+    delivery_1 = models.BooleanField(verbose_name=_("Доставка: понедельник"))
+    delivery_2 = models.BooleanField(verbose_name=_("Доставка: вторник"))
+    delivery_3 = models.BooleanField(verbose_name=_("Доставка: среда"))
+    delivery_4 = models.BooleanField(verbose_name=_("Доставка: четверг"))
+    delivery_5 = models.BooleanField(verbose_name=_("Доставка: пятница"))
+    delivery_6 = models.BooleanField(verbose_name=_("Доставка: суббота"))
+    delivery_7 = models.BooleanField(verbose_name=_("Доставка: воскресенье"))
+
+    class Meta:
+        verbose_name = _("Допданные Новой почты")
+        verbose_name_plural = _("Допданные Новой почты")
+
+    def __str__(self):
+        return self.description
+
+
 class DeliveryMethod(BaseModel):
     class Kind(models.TextChoices):
         CARRIER = "carrier", _("Перевозчик")
