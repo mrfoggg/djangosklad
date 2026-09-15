@@ -68,3 +68,39 @@ class NovaPoshtaInlineTests(SettlementDataMixin, TestCase):
         self.assertEqual(regions2.formset.page.number, 1)
         self.assertEqual(len(settlements2.formset.forms), 1)
         self.assertEqual(settlements2.formset.forms[0].instance.area_id, self.area.pk)
+
+    def test_ukrainian_alphabet_across_pages(self):
+        self.client.force_login(get_user_model().objects.create_user('alphabet-admin', is_staff=True, is_superuser=True))
+        self.region.description = 'Ізюмський'
+        self.region.save()
+        names = ['Яворівський', 'Їжаківський', 'Єланецький', 'Гадяцький', 'Ґрунський', 'Балаклійський']
+        names += [f'Долинський {index:02}' for index in range(17)]
+        for index, name in enumerate(names):
+            NovaPoshtaRegion.objects.create(ref=UUID(int=index + 5000), area=self.area, description=name, region_type='район')
+        url = reverse('admin:catalogs_novaposhtaarea_change', args=[self.area.pk])
+        first = self.client.get(url).context['inline_admin_formsets'][0].formset
+        second = self.client.get(url, {first.get_pagination_key(): 2}).context['inline_admin_formsets'][0].formset
+        actual = [form.instance.description for form in [*first.forms, *second.forms]]
+        self.assertEqual(actual, ['Балаклійський', 'Гадяцький', 'Ґрунський'] + [f'Долинський {index:02}' for index in range(17)] + ['Єланецький', 'Ізюмський', 'Їжаківський', 'Яворівський'])
+
+    def test_catalog_changelists_use_ukrainian_order(self):
+        from django.contrib import admin
+        from django.test import RequestFactory
+        from catalogs.models import NovaPoshtaSettlement
+        user = get_user_model().objects.create_user('list-alphabet', is_staff=True, is_superuser=True)
+        names = ['Ізюмський', 'Яворівський', 'Балаклійський', 'Єланецький']
+        with patch('catalogs.nova_poshta._fetch_catalog', return_value=[
+            {**self.item, 'Ref': str(UUID(int=index + 6000)), 'Description': name}
+            for index, name in enumerate(names)
+        ]):
+            sync_settlements(self.area)
+        for index, name in enumerate(names):
+            NovaPoshtaArea.objects.create(ref=UUID(int=index + 6000), description=name)
+            NovaPoshtaRegion.objects.create(ref=UUID(int=index + 6000), area=self.area, description=name, region_type='район')
+        for model in (NovaPoshtaArea, NovaPoshtaRegion, NovaPoshtaSettlement):
+            for direction, expected in (('0', ['Балаклійський', 'Єланецький', 'Ізюмський', 'Яворівський']), ('-0', ['Яворівський', 'Ізюмський', 'Єланецький', 'Балаклійський'])):
+                request = RequestFactory().get('/', {'o': direction})
+                request.user = user
+                changelist = admin.site._registry[model].get_changelist_instance(request)
+                actual = [obj.description for obj in changelist.result_list if obj.description in names]
+                self.assertEqual(actual, expected)

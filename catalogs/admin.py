@@ -2,10 +2,12 @@ import re
 
 from django import forms
 from django.contrib import admin, messages
+from django.contrib.admin.views.main import ChangeList
 from django.http import HttpResponse, Http404
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.db import connection, models
+from django.db.models.functions import Collate
 from django.utils.translation import gettext_lazy as _
 from django_countries.widgets import CountrySelectWidget
 from mptt.admin import DraggableMPTTAdmin
@@ -44,7 +46,33 @@ from .models import (
 BASE_READONLY_DATES = ("created", "updated")
 
 
+class NovaPoshtaChangeList(ChangeList):
+    def get_ordering(self, request, queryset):
+        ordering = super().get_ordering(request, queryset)
+        if connection.vendor != "sqlite":
+            return ordering
+        result = []
+        for field in ordering:
+            if isinstance(field, str):
+                name = field.lstrip("-")
+                name = {
+                    "area": "area__description", "region": "region__description",
+                    "settlement_type": "settlement_type__description",
+                }.get(name, name)
+                if name in ("description", "area__description", "region__description", "settlement_type__description"):
+                    expression = Collate(name, "ukrainian")
+                    result.append(expression.desc() if field.startswith("-") else expression.asc())
+                    continue
+            result.append(field)
+        return result
+
+
 class NovaPoshtaCatalogAdmin(ModelAdmin):
+    ordering = ("description", "ref")
+
+    def get_changelist(self, request, **kwargs):
+        return NovaPoshtaChangeList
+
     def get_readonly_fields(self, request, obj=None):
         return tuple(field.name for field in self.model._meta.fields)
 
@@ -83,6 +111,12 @@ class NovaPoshtaReadonlyInline(TabularInline):
     show_change_link = True
     per_page = 20
     ordering = ("description", "ref")
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        if connection.vendor == "sqlite":
+            return queryset.order_by(Collate("description", "ukrainian"), "ref")
+        return queryset
 
     def has_add_permission(self, request, obj=None):
         return False
