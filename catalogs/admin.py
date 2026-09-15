@@ -77,11 +77,46 @@ class NovaPoshtaCatalogAdmin(ModelAdmin):
         ])
 
 
+class NovaPoshtaReadonlyInline(TabularInline):
+    extra = 0
+    can_delete = False
+    show_change_link = True
+    per_page = 20
+    ordering = ("description", "ref")
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+class NovaPoshtaRegionInline(NovaPoshtaReadonlyInline):
+    model = NovaPoshtaRegion
+    fk_name = "area"
+    fields = ("description", "region_type", "is_active", "created", "updated")
+    readonly_fields = fields
+
+
+class NovaPoshtaSettlementInline(NovaPoshtaReadonlyInline):
+    model = NovaPoshtaSettlement
+    fk_name = "region"
+    fields = ("description", "settlement_type", "warehouse", "address_delivery_allowed", "is_active", "updated")
+    readonly_fields = fields
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("settlement_type")
+
+
 @admin.register(NovaPoshtaArea)
 class NovaPoshtaAreaAdmin(NovaPoshtaCatalogAdmin):
     list_display = ("description", "ref")
     search_fields = ("description", "ref")
     actions_list = ("update_areas",)
+    inlines = (NovaPoshtaRegionInline,)
 
     def get_search_results(self, request, queryset, search_term):
         results, may_have_duplicates = super().get_search_results(
@@ -135,6 +170,7 @@ class NovaPoshtaRegionAdmin(NovaPoshtaCatalogAdmin):
     search_fields = ("description", "ref", "area__description")
     autocomplete_fields = ("area",)
     actions_list = ("update_regions",)
+    inlines = (NovaPoshtaSettlementInline,)
 
     @action(
         description=_("Обновить районы"),
