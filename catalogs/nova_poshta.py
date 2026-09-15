@@ -81,7 +81,7 @@ def sync_areas():
                 created += 1
             elif area.description != description:
                 area.description = description
-                area.save(update_fields=["description"])
+                area.save(update_fields=["description", "updated"])
                 updated += 1
             else:
                 unchanged += 1
@@ -134,7 +134,7 @@ def sync_regions(area=None):
             if changed:
                 for field in changed:
                     setattr(region, field, values[field])
-                region.save(update_fields=changed)
+                region.save(update_fields=[*changed, "updated"])
                 updated += 1
             else:
                 unchanged += 1
@@ -233,7 +233,7 @@ def sync_settlements(area=None):
             batch_size=500,
             update_conflicts=True,
             unique_fields=["ref"],
-            update_fields=["area", "region", "settlement_type", *SETTLEMENT_FIELDS],
+            update_fields=["area", "region", "settlement_type", *SETTLEMENT_FIELDS, "updated"],
         )
     return SettlementSyncResult(processed=len(objects))
 
@@ -264,7 +264,7 @@ def sync_settlement_types():
                 created += 1
             elif (current.description, current.code) != (obj.description, obj.code):
                 current.description, current.code = obj.description, obj.code
-                current.save(update_fields=["description", "code"])
+                current.save(update_fields=["description", "code", "updated"])
                 updated += 1
             else:
                 unchanged += 1

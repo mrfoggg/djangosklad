@@ -650,7 +650,7 @@ class RetailStore(BaseModel):
         super().save(*args, **kwargs)
 
 
-class NovaPoshtaArea(models.Model):
+class NovaPoshtaArea(BaseModel):
     ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
     description = models.CharField(max_length=255, verbose_name=_("Название"))
 
@@ -663,7 +663,7 @@ class NovaPoshtaArea(models.Model):
         return self.description
 
 
-class NovaPoshtaRegion(models.Model):
+class NovaPoshtaRegion(BaseModel):
     ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
     area = models.ForeignKey(
         NovaPoshtaArea,
@@ -683,7 +683,7 @@ class NovaPoshtaRegion(models.Model):
         return self.description
 
 
-class NovaPoshtaSettlementType(models.Model):
+class NovaPoshtaSettlementType(BaseModel):
     ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
     description = models.CharField(max_length=100, verbose_name=_("Название"))
     code = models.CharField(max_length=20, blank=True, verbose_name=_("Сокращение"))
@@ -697,7 +697,7 @@ class NovaPoshtaSettlementType(models.Model):
         return self.description
 
 
-class NovaPoshtaSettlement(models.Model):
+class NovaPoshtaSettlement(BaseModel):
     ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
     area = models.ForeignKey(
         NovaPoshtaArea, on_delete=models.PROTECT,

@@ -42,8 +42,38 @@ from .models import (
 BASE_READONLY_DATES = ("created", "updated")
 
 
+class NovaPoshtaCatalogAdmin(ModelAdmin):
+    def get_readonly_fields(self, request, obj=None):
+        return tuple(field.name for field in self.model._meta.fields)
+
+    def get_list_display(self, request):
+        return (*super().get_list_display(request), "created", "updated")
+
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = super().get_fieldsets(request, obj)
+        if self.fieldsets:
+            return (*fieldsets, (_("Даты"), {"fields": ("created", "updated")}))
+        return fieldsets
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_sync_permission(self, request):
+        opts = self.model._meta
+        return request.user.has_perms([
+            f"{opts.app_label}.add_{opts.model_name}",
+            f"{opts.app_label}.change_{opts.model_name}",
+        ])
+
+
 @admin.register(NovaPoshtaArea)
-class NovaPoshtaAreaAdmin(ModelAdmin):
+class NovaPoshtaAreaAdmin(NovaPoshtaCatalogAdmin):
     list_display = ("description", "ref")
     search_fields = ("description", "ref")
     actions_list = ("update_areas",)
@@ -67,7 +97,7 @@ class NovaPoshtaAreaAdmin(ModelAdmin):
         description=_("Обновить области"),
         icon="sync",
         url_path="update-areas",
-        permissions=["add", "change"],
+        permissions=["sync"],
         dialog={
             "title": _("Обновить области Новой почты"),
             "description": _("Загрузить актуальные названия и добавить новые области."),
@@ -93,7 +123,7 @@ class NovaPoshtaAreaAdmin(ModelAdmin):
 
 
 @admin.register(NovaPoshtaRegion)
-class NovaPoshtaRegionAdmin(ModelAdmin):
+class NovaPoshtaRegionAdmin(NovaPoshtaCatalogAdmin):
     list_display = ("description", "area", "region_type", "ref")
     list_filter = ("area",)
     list_select_related = ("area",)
@@ -105,7 +135,7 @@ class NovaPoshtaRegionAdmin(ModelAdmin):
         description=_("Обновить районы"),
         icon="sync",
         url_path="update-regions",
-        permissions=["add", "change"],
+        permissions=["sync"],
         dialog={
             "title": _("Обновить районы Новой почты"),
             "form_class": NovaPoshtaRegionUpdateForm,
@@ -131,14 +161,14 @@ class NovaPoshtaRegionAdmin(ModelAdmin):
 
 
 @admin.register(NovaPoshtaSettlementType)
-class NovaPoshtaSettlementTypeAdmin(ModelAdmin):
+class NovaPoshtaSettlementTypeAdmin(NovaPoshtaCatalogAdmin):
     list_display = ("description", "code", "ref")
     search_fields = ("description", "code", "ref")
     actions_list = ("update_settlement_types",)
 
     @action(
         description=_("Обновить типы населённых пунктов"),
-        icon="sync", url_path="update-settlement-types", permissions=["add", "change"],
+        icon="sync", url_path="update-settlement-types", permissions=["sync"],
         dialog={
             "title": _("Обновить типы населённых пунктов"),
             "form_submit_text": _("Обновить"),
@@ -162,7 +192,7 @@ class NovaPoshtaSettlementTypeAdmin(ModelAdmin):
 
 
 @admin.register(NovaPoshtaSettlement)
-class NovaPoshtaSettlementAdmin(ModelAdmin):
+class NovaPoshtaSettlementAdmin(NovaPoshtaCatalogAdmin):
     list_display = ("description", "settlement_type", "area", "region", "warehouse", "address_delivery_allowed")
     list_filter = ("area", "settlement_type", "warehouse", "address_delivery_allowed")
     list_select_related = ("area", "region", "settlement_type")
@@ -207,7 +237,7 @@ class NovaPoshtaSettlementAdmin(ModelAdmin):
         description=_("Обновить населённые пункты"),
         icon="sync",
         url_path="update-settlements",
-        permissions=["add", "change"],
+        permissions=["sync"],
         dialog={
             "title": _("Обновить населённые пункты Новой почты"),
             "form_class": NovaPoshtaSettlementUpdateForm,
