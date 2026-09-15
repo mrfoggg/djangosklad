@@ -18,7 +18,7 @@ from unfold.decorators import action
 from unfold.widgets import UnfoldAdminCheckboxSelectMultipleWidget
 
 from .forms import NovaPoshtaRegionUpdateForm, NovaPoshtaSettlementUpdateForm, PhoneNumberForm
-from .nova_poshta import sync_settlement_details
+from .nova_poshta import sync_settlement_details, sync_warehouses
 from .nova_poshta import NovaPoshtaError, sync_areas, sync_regions, sync_settlements, sync_settlement_types
 
 from .models import (
@@ -36,6 +36,7 @@ from .models import (
     ContractorLegalDetails,
     ContractorLink,
     MeasurementUnit,
+    NovaPoshtaWarehouse,
     NovaPoshtaArea,
     NovaPoshtaRegion,
     NovaPoshtaSettlement,
@@ -310,6 +311,61 @@ class NovaPoshtaSettlementDetailsInline(StackedInline):
         return request.user.has_perm("catalogs.view_novaposhtasettlement") or request.user.has_perm("catalogs.change_novaposhtasettlement")
 
 
+class NovaPoshtaWarehouseInline(TabularInline):
+    model = NovaPoshtaWarehouse
+    extra = 0
+    can_delete = False
+    show_change_link = True
+    per_page = 20
+    tab = True
+    fields = ("number", "description", "category", "status", "total_max_weight", "is_active")
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(NovaPoshtaWarehouse)
+class NovaPoshtaWarehouseAdmin(NovaPoshtaCatalogAdmin):
+    list_display = ("number", "description", "settlement", "category", "status")
+    search_fields = ("description", "description_ru", "number", "short_address", "settlement_description", "site_key", "ref")
+    list_filter = ("category", "status")
+    list_select_related = ("settlement",)
+    actions_list = ("update_warehouses",)
+
+    fieldsets = (
+        (_("Отделение"), {"fields": ('number', 'site_key', 'description', 'description_ru', 'category', 'status', 'status_date', 'phone', 'warehouse_index')}),
+        (_("Адрес"), {"fields": ('settlement', 'short_address', 'short_address_ru', 'postal_code', 'latitude', 'longitude', 'city_description', 'city_description_ru', 'settlement_description', 'settlement_area_description', 'settlement_regions_description', 'settlement_type_description', 'settlement_type_description_ru', 'region_city', 'location')}),
+        (_("Услуги и оборудование"), {"fields": ('post_finance', 'bicycle_parking', 'payment_access', 'pos_terminal', 'international_shipping', 'warehouse_illusha', 'warehouse_for_agent', 'generator_enabled', 'work_in_mobile_awis', 'deny_to_select', 'can_get_money_transfer', 'has_mirror', 'has_fitting_room', 'only_receiving_parcel')}),
+        (_("Ограничения и почтоматы"), {"fields": ('total_max_weight', 'place_max_weight', 'max_declared_cost', 'self_service_workplaces_count', 'sending_dimensions', 'receiving_dimensions', 'post_machine_type', 'postomat_for')}),
+        (_("Графики"), {"fields": ('schedule', 'reception', 'delivery')}),
+        (_("Идентификаторы источника"), {"fields": ('ref', 'settlement_ref', 'city_ref', 'warehouse_type_ref', 'district_code', 'direct', 'beacon_code')}),
+        (_("Исходный ответ API"), {"fields": ("raw_data",), "classes": ("collapse",)}),
+    )
+
+    @action(
+        description=_("Обновить все отделения"), icon="sync", url_path="update-warehouses",
+        permissions=["sync"],
+        dialog={"title": _("Обновить отделения и почтоматы Новой почты"),
+                "description": _("Загрузить все страницы справочника. Это может занять несколько минут."),
+                "form_submit_text": _("Обновить")},
+    )
+    def update_warehouses(self, request, form):
+        try:
+            result = sync_warehouses()
+        except NovaPoshtaError as exc:
+            self.message_user(request, str(exc), messages.ERROR)
+        else:
+            self.message_user(request, _("Сохранено: %(processed)s, отключено: %(deactivated)s.") % vars(result), messages.SUCCESS)
+        url = reverse("admin:catalogs_novaposhtawarehouse_changelist")
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponse(headers={"HX-Redirect": url})
+        return redirect(url)
+
+
 @admin.register(NovaPoshtaSettlement)
 class NovaPoshtaSettlementAdmin(NovaPoshtaCatalogAdmin):
     list_display = ("description", "settlement_type", "area", "region", "warehouse", "address_delivery_allowed")
@@ -318,8 +374,31 @@ class NovaPoshtaSettlementAdmin(NovaPoshtaCatalogAdmin):
     search_fields = ("description", "description_ru", "description_translit", "ref")
     autocomplete_fields = ("area", "region")
     actions_list = ("update_settlements",)
-    actions_detail = ("update_details",)
-    inlines = (NovaPoshtaSettlementDetailsInline,)
+    actions_detail = ("update_details", "update_warehouses")
+    inlines = (NovaPoshtaSettlementDetailsInline, NovaPoshtaWarehouseInline)
+
+    def has_update_warehouses_permission(self, request, object_id=None):
+        return request.user.has_perms(("catalogs.add_novaposhtawarehouse", "catalogs.change_novaposhtawarehouse"))
+
+    @action(
+        description=_("Обновить отделения"), icon="sync", url_path="update-warehouses",
+        permissions=["update_warehouses"],
+        dialog={"title": _("Обновить отделения населённого пункта"), "form_submit_text": _("Обновить")},
+    )
+    def update_warehouses(self, request, form, object_id):
+        settlement = self.get_object(request, object_id)
+        if settlement is None:
+            raise Http404
+        try:
+            result = sync_warehouses(settlement)
+        except NovaPoshtaError as exc:
+            self.message_user(request, str(exc), messages.ERROR)
+        else:
+            self.message_user(request, _("Сохранено: %(processed)s, отключено: %(deactivated)s.") % vars(result), messages.SUCCESS)
+        url = reverse("admin:catalogs_novaposhtasettlement_change", args=[settlement.pk])
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponse(headers={"HX-Redirect": url})
+        return redirect(url)
 
     def has_update_details_permission(self, request, object_id=None):
         return request.user.has_perm("catalogs.change_novaposhtasettlement")

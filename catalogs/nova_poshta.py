@@ -7,7 +7,7 @@ from uuid import UUID
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
-from .models import NovaPoshtaSettlementDetails
+from .models import NovaPoshtaSettlementDetails, NovaPoshtaWarehouse
 
 from .models import NovaPoshtaArea, NovaPoshtaRegion, NovaPoshtaSettlement, NovaPoshtaSettlementType
 
@@ -65,11 +65,11 @@ class AreaSyncResult:
     deactivated: int = 0
 
 
-def _fetch_catalog(method, properties):
+def _fetch_catalog(method, properties, model="AddressGeneral"):
     request = Request(
         "https://api.novaposhta.ua/v2.0/json/",
         data=json.dumps({
-            "modelName": "AddressGeneral",
+            "modelName": model,
             "calledMethod": method,
             "methodProperties": properties,
         }).encode(),
@@ -84,6 +84,10 @@ def _fetch_catalog(method, properties):
     except (ValueError, UnicodeError) as exc:
         raise NovaPoshtaError("Новая почта вернула некорректный JSON.") from exc
 
+    # urllib follows HTTP 303 after POST with a GET to the cached file.
+    # Cached warehouse files may contain the data array without an API envelope.
+    if method == "getWarehouses" and isinstance(payload, list):
+        return payload
     if not isinstance(payload, dict) or payload.get("success") is not True:
         raise NovaPoshtaError("Новая почта вернула ошибку при получении справочника.")
     data = payload.get("data")
@@ -339,3 +343,114 @@ def _deactivate_missing(queryset, received_refs):
             is_active=False, updated=now
         )
     return count
+
+
+WAREHOUSE_FIELDS = {
+    "site_key": "SiteKey",
+    "short_address_ru": "ShortAddressRu",
+    "city_description": "CityDescription",
+    "city_description_ru": "CityDescriptionRu",
+    "settlement_area_description": "SettlementAreaDescription",
+    "settlement_regions_description": "SettlementRegionsDescription",
+    "settlement_type_description": "SettlementTypeDescription",
+    "settlement_type_description_ru": "SettlementTypeDescriptionRu",
+    "district_code": "DistrictCode",
+    "status_date": "WarehouseStatusDate",
+    "direct": "Direct",
+    "region_city": "RegionCity",
+    "post_machine_type": "PostMachineType",
+    "postomat_for": "PostomatFor",
+    "warehouse_index": "WarehouseIndex",
+    "beacon_code": "BeaconCode",
+    "location": "Location",
+    "post_finance": "PostFinance",
+    "bicycle_parking": "BicycleParking",
+    "payment_access": "PaymentAccess",
+    "pos_terminal": "POSTerminal",
+    "international_shipping": "InternationalShipping",
+    "warehouse_illusha": "WarehouseIllusha",
+    "warehouse_for_agent": "WarehouseForAgent",
+    "generator_enabled": "GeneratorEnabled",
+    "work_in_mobile_awis": "WorkInMobileAwis",
+    "deny_to_select": "DenyToSelect",
+    "can_get_money_transfer": "CanGetMoneyTransfer",
+    "has_mirror": "HasMirror",
+    "has_fitting_room": "HasFittingRoom",
+    "only_receiving_parcel": "OnlyReceivingParcel",
+    "self_service_workplaces_count": "SelfServiceWorkplacesCount",
+    "max_declared_cost": "MaxDeclaredCost",
+
+    "number": "Number", "description": "Description", "description_ru": "DescriptionRu",
+    "short_address": "ShortAddress", "phone": "Phone", "category": "CategoryOfWarehouse",
+    "status": "WarehouseStatus", "postal_code": "PostalCodeUA",
+    "settlement_description": "SettlementDescription", "latitude": "Latitude", "longitude": "Longitude",
+    "total_max_weight": "TotalMaxWeightAllowed", "place_max_weight": "PlaceMaxWeightAllowed",
+    "schedule": "Schedule", "reception": "Reception", "delivery": "Delivery",
+    "sending_dimensions": "SendingLimitationsOnDimensions", "receiving_dimensions": "ReceivingLimitationsOnDimensions",
+}
+
+
+def _build_warehouse(item, settlements, selected_settlement):
+    try:
+        def optional_ref(value):
+            ref = UUID(value) if value else None
+            return ref if ref and ref.int else None
+
+        settlement_ref = optional_ref(item.get("SettlementRef"))
+        if selected_settlement is not None and settlement_ref != selected_settlement.ref:
+            raise ValueError("Unexpected settlement")
+        obj = NovaPoshtaWarehouse(
+            ref=UUID(item["Ref"]), settlement_ref=settlement_ref,
+            settlement_id=settlement_ref if settlement_ref in settlements else None,
+            city_ref=optional_ref(item.get("CityRef")),
+            warehouse_type_ref=UUID(item["TypeOfWarehouse"]), raw_data=item,
+        )
+        for name, api_name in WAREHOUSE_FIELDS.items():
+            field = obj._meta.get_field(name)
+            if name in ("number", "description"):
+                value = item[api_name]
+            else:
+                value = item.get(api_name, field.get_default())
+            if field.null and value in ("", None):
+                value = None
+            elif value is None and field.blank:
+                value = field.get_default()
+            if name in ("schedule", "reception", "delivery", "sending_dimensions", "receiving_dimensions") and not isinstance(value, dict):
+                raise ValueError("Expected JSON object")
+            setattr(obj, name, field.clean(value, obj))
+        return obj
+    except (KeyError, TypeError, ValueError, AttributeError, ValidationError) as exc:
+        raise NovaPoshtaError("Некорректные данные отделения Новой почты. Обновление отменено.") from exc
+
+
+def sync_warehouses(settlement=None):
+    """Загрузить до пустой страницы, проверить весь ответ и атомарно обновить справочник."""
+    settlements = set(NovaPoshtaSettlement.objects.values_list("ref", flat=True))
+    objects, seen = [], set()
+    for page in range(1, 1001):
+        properties = {"Page": str(page), "Limit": "500"}
+        if settlement is not None:
+            properties["SettlementRef"] = str(settlement.ref)
+        data = _fetch_catalog("getWarehouses", properties, model="Address")
+        if not data:
+            break
+        for item in data:
+            obj = _build_warehouse(item, settlements, settlement)
+            if obj.ref in seen:
+                raise NovaPoshtaError("API повторяет отделения между страницами. Обновление отменено.")
+            seen.add(obj.ref)
+            objects.append(obj)
+    else:
+        raise NovaPoshtaError("Превышен лимит страниц справочника отделений.")
+    if settlement is None and not objects:
+        raise NovaPoshtaError("Новая почта вернула пустой общий справочник отделений. Обновление отменено.")
+    with transaction.atomic():
+        NovaPoshtaWarehouse.objects.bulk_create(
+            objects, batch_size=500, update_conflicts=True, unique_fields=["ref"],
+            update_fields=["settlement", "settlement_ref", "city_ref", "warehouse_type_ref", *WAREHOUSE_FIELDS, "raw_data", "is_active", "updated"],
+        )
+        scope = NovaPoshtaWarehouse.objects.all()
+        if settlement is not None:
+            scope = scope.filter(settlement_ref=settlement.ref)
+        deactivated = _deactivate_missing(scope, seen)
+    return SettlementSyncResult(len(objects), deactivated)
