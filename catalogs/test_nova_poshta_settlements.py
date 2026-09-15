@@ -115,7 +115,7 @@ class SettlementSyncTests(SettlementDataMixin, TestCase):
         self.assertIsNone(obj.warehouse)
         self.assertEqual(obj.index_1, "00123")
         fetch.return_value = []
-        self.assertEqual(sync_settlements(self.area), SettlementSyncResult(0))
+        self.assertEqual(sync_settlements(self.area), SettlementSyncResult(0, deactivated=1))
         self.assertTrue(NovaPoshtaSettlement.objects.filter(ref=obj.ref).exists())
 
     @patch("catalogs.nova_poshta._fetch_catalog")

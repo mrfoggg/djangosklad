@@ -47,12 +47,15 @@ class NovaPoshtaCatalogAdmin(ModelAdmin):
         return tuple(field.name for field in self.model._meta.fields)
 
     def get_list_display(self, request):
-        return (*super().get_list_display(request), "created", "updated")
+        return (*super().get_list_display(request), "is_active", "created", "updated")
+
+    def get_list_filter(self, request):
+        return (*super().get_list_filter(request), "is_active")
 
     def get_fieldsets(self, request, obj=None):
         fieldsets = super().get_fieldsets(request, obj)
         if self.fieldsets:
-            return (*fieldsets, (_("Даты"), {"fields": ("created", "updated")}))
+            return (*fieldsets, (_("Даты"), {"fields": ("is_active", "created", "updated")}))
         return fieldsets
 
     def has_add_permission(self, request):
@@ -112,7 +115,7 @@ class NovaPoshtaAreaAdmin(NovaPoshtaCatalogAdmin):
         else:
             self.message_user(
                 request,
-                _("Области обновлены. Добавлено: %(created)s, изменено: %(updated)s, без изменений: %(unchanged)s.")
+                _("Области обновлены. Добавлено: %(created)s, изменено: %(updated)s, без изменений: %(unchanged)s, отключено: %(deactivated)s.")
                 % vars(result),
                 messages.SUCCESS,
             )
@@ -150,7 +153,7 @@ class NovaPoshtaRegionAdmin(NovaPoshtaCatalogAdmin):
         else:
             self.message_user(
                 request,
-                _("Районы обновлены. Добавлено: %(created)s, изменено: %(updated)s, без изменений: %(unchanged)s.")
+                _("Районы обновлены. Добавлено: %(created)s, изменено: %(updated)s, без изменений: %(unchanged)s, отключено: %(deactivated)s.")
                 % vars(result),
                 messages.SUCCESS,
             )
@@ -182,7 +185,7 @@ class NovaPoshtaSettlementTypeAdmin(NovaPoshtaCatalogAdmin):
         else:
             self.message_user(
                 request,
-                _("Типы обновлены. Добавлено: %(created)s, изменено: %(updated)s, без изменений: %(unchanged)s.") % vars(result),
+                _("Типы обновлены. Добавлено: %(created)s, изменено: %(updated)s, без изменений: %(unchanged)s, отключено: %(deactivated)s.") % vars(result),
                 messages.SUCCESS,
             )
         url = reverse("admin:catalogs_novaposhtasettlementtype_changelist")
@@ -252,7 +255,7 @@ class NovaPoshtaSettlementAdmin(NovaPoshtaCatalogAdmin):
         else:
             self.message_user(
                 request,
-                _("Населённые пункты обновлены. Загружено и сохранено: %(processed)s.")
+                _("Населённые пункты обновлены. Загружено и сохранено: %(processed)s, отключено: %(deactivated)s.")
                 % vars(result),
                 messages.SUCCESS,
             )

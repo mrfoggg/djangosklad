@@ -6,6 +6,7 @@ from uuid import UUID
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.utils import timezone
 
 from .models import NovaPoshtaArea, NovaPoshtaRegion, NovaPoshtaSettlement, NovaPoshtaSettlementType
 
@@ -19,6 +20,7 @@ class AreaSyncResult:
     created: int
     updated: int
     unchanged: int
+    deactivated: int = 0
 
 
 def _fetch_catalog(method, properties):
@@ -79,13 +81,15 @@ def sync_areas():
             )
             if is_new:
                 created += 1
-            elif area.description != description:
+            elif area.description != description or not area.is_active:
+                area.is_active = True
                 area.description = description
-                area.save(update_fields=["description", "updated"])
+                area.save(update_fields=["description", "is_active", "updated"])
                 updated += 1
             else:
                 unchanged += 1
-    return AreaSyncResult(created, updated, unchanged)
+        deactivated = _deactivate_missing(NovaPoshtaArea.objects.all(), areas)
+    return AreaSyncResult(created, updated, unchanged, deactivated)
 
 
 def fetch_regions(area_ref):
@@ -120,7 +124,7 @@ def sync_regions(area=None):
         for ref, values in loaded.items():
             if ref in regions:
                 raise NovaPoshtaError("Один район получен для нескольких областей.")
-            regions[ref] = {**values, "area_id": current_area.ref}
+            regions[ref] = {**values, "area_id": current_area.ref, "is_active": True}
 
     created = updated = unchanged = 0
     # Сначала загружаем все области, чтобы ошибка API не оставила частичное обновление.
@@ -138,7 +142,11 @@ def sync_regions(area=None):
                 updated += 1
             else:
                 unchanged += 1
-    return AreaSyncResult(created, updated, unchanged)
+        scope = NovaPoshtaRegion.objects.all()
+        if area is not None:
+            scope = scope.filter(area=area)
+        deactivated = _deactivate_missing(scope, regions)
+    return AreaSyncResult(created, updated, unchanged, deactivated)
 
 
 SETTLEMENT_FIELDS = {
@@ -166,6 +174,7 @@ SETTLEMENT_FIELDS = {
 @dataclass(frozen=True)
 class SettlementSyncResult:
     processed: int
+    deactivated: int = 0
 
 
 def _build_settlement(item, areas, regions, selected_area, settlement_types):
@@ -233,9 +242,13 @@ def sync_settlements(area=None):
             batch_size=500,
             update_conflicts=True,
             unique_fields=["ref"],
-            update_fields=["area", "region", "settlement_type", *SETTLEMENT_FIELDS, "updated"],
+            update_fields=["area", "region", "settlement_type", *SETTLEMENT_FIELDS, "is_active", "updated"],
         )
-    return SettlementSyncResult(processed=len(objects))
+        scope = NovaPoshtaSettlement.objects.all()
+        if area is not None:
+            scope = scope.filter(area=area)
+        deactivated = _deactivate_missing(scope, seen)
+    return SettlementSyncResult(processed=len(objects), deactivated=deactivated)
 
 
 def sync_settlement_types():
@@ -262,10 +275,25 @@ def sync_settlement_types():
             )
             if is_new:
                 created += 1
-            elif (current.description, current.code) != (obj.description, obj.code):
+            elif (current.description, current.code) != (obj.description, obj.code) or not current.is_active:
+                current.is_active = True
                 current.description, current.code = obj.description, obj.code
-                current.save(update_fields=["description", "code", "updated"])
+                current.save(update_fields=["description", "code", "is_active", "updated"])
                 updated += 1
             else:
                 unchanged += 1
-    return AreaSyncResult(created, updated, unchanged)
+        deactivated = _deactivate_missing(NovaPoshtaSettlementType.objects.all(), objects)
+    return AreaSyncResult(created, updated, unchanged, deactivated)
+
+
+def _deactivate_missing(queryset, received_refs):
+    """Вызывается внутри транзакции после полной успешной загрузки."""
+    received_refs = set(received_refs)
+    missing = [ref for ref in queryset.filter(is_active=True).values_list("ref", flat=True) if ref not in received_refs]
+    count = 0
+    now = timezone.now()
+    for offset in range(0, len(missing), 500):
+        count += queryset.filter(ref__in=missing[offset:offset + 500], is_active=True).update(
+            is_active=False, updated=now
+        )
+    return count
