@@ -95,6 +95,8 @@ class NovaPoshtaReadonlyInline(TabularInline):
 
 
 class NovaPoshtaRegionInline(NovaPoshtaReadonlyInline):
+    tab = True
+    verbose_name_plural = _("Районы")
     model = NovaPoshtaRegion
     fk_name = "area"
     fields = ("description", "region_type", "is_active", "created", "updated")
@@ -111,12 +113,23 @@ class NovaPoshtaSettlementInline(NovaPoshtaReadonlyInline):
         return super().get_queryset(request).select_related("settlement_type")
 
 
+class NovaPoshtaAreaSettlementInline(NovaPoshtaSettlementInline):
+    fk_name = "area"
+    tab = True
+    verbose_name_plural = _("Населённые пункты")
+    fields = ("description", "settlement_type", "region", "warehouse", "is_active", "updated")
+    readonly_fields = fields
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("region")
+
+
 @admin.register(NovaPoshtaArea)
 class NovaPoshtaAreaAdmin(NovaPoshtaCatalogAdmin):
     list_display = ("description", "ref")
     search_fields = ("description", "ref")
     actions_list = ("update_areas",)
-    inlines = (NovaPoshtaRegionInline,)
+    inlines = (NovaPoshtaRegionInline, NovaPoshtaAreaSettlementInline)
 
     def get_search_results(self, request, queryset, search_term):
         results, may_have_duplicates = super().get_search_results(
