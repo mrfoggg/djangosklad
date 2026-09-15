@@ -18,7 +18,7 @@ from unfold.decorators import action
 from unfold.widgets import UnfoldAdminCheckboxSelectMultipleWidget
 
 from .forms import NovaPoshtaRegionUpdateForm, NovaPoshtaSettlementUpdateForm, PhoneNumberForm
-from .nova_poshta import sync_settlement_details, sync_warehouses
+from .nova_poshta import sync_settlement_details, sync_warehouses, sync_warehouse_types
 from .nova_poshta import NovaPoshtaError, sync_areas, sync_regions, sync_settlements, sync_settlement_types
 
 from .models import (
@@ -37,6 +37,7 @@ from .models import (
     ContractorLink,
     MeasurementUnit,
     NovaPoshtaWarehouse,
+    NovaPoshtaWarehouseType,
     NovaPoshtaArea,
     NovaPoshtaRegion,
     NovaPoshtaSettlement,
@@ -318,7 +319,7 @@ class NovaPoshtaWarehouseInline(TabularInline):
     show_change_link = True
     per_page = 20
     tab = True
-    fields = ("number", "description", "category", "status", "total_max_weight", "is_active")
+    fields = ("number", "description", "warehouse_type", "category", "status", "total_max_weight", "is_active")
     readonly_fields = fields
 
     def has_add_permission(self, request, obj=None):
@@ -328,21 +329,45 @@ class NovaPoshtaWarehouseInline(TabularInline):
         return False
 
 
+@admin.register(NovaPoshtaWarehouseType)
+class NovaPoshtaWarehouseTypeAdmin(NovaPoshtaCatalogAdmin):
+    list_display = ("description", "description_ru", "ref")
+    search_fields = ("description", "description_ru", "ref")
+    actions_list = ("update_types",)
+
+    @action(
+        description=_("Обновить типы отделений"), icon="sync", url_path="update-types",
+        permissions=["sync"],
+        dialog={"title": _("Обновить типы отделений Новой почты"), "form_submit_text": _("Обновить")},
+    )
+    def update_types(self, request, form):
+        try:
+            result = sync_warehouse_types()
+        except NovaPoshtaError as exc:
+            self.message_user(request, str(exc), messages.ERROR)
+        else:
+            self.message_user(request, _("Добавлено: %(created)s, изменено: %(updated)s, без изменений: %(unchanged)s, отключено: %(deactivated)s.") % vars(result), messages.SUCCESS)
+        url = reverse("admin:catalogs_novaposhtawarehousetype_changelist")
+        if request.headers.get("HX-Request") == "true":
+            return HttpResponse(headers={"HX-Redirect": url})
+        return redirect(url)
+
+
 @admin.register(NovaPoshtaWarehouse)
 class NovaPoshtaWarehouseAdmin(NovaPoshtaCatalogAdmin):
-    list_display = ("number", "description", "settlement", "category", "status")
+    list_display = ("number", "description", "settlement", "warehouse_type", "category", "status")
     search_fields = ("description", "description_ru", "number", "short_address", "settlement_description", "site_key", "ref")
-    list_filter = ("category", "status")
-    list_select_related = ("settlement",)
+    list_filter = ("warehouse_type", "category", "status")
+    list_select_related = ("settlement", "warehouse_type")
     actions_list = ("update_warehouses",)
 
     fieldsets = (
-        (_("Отделение"), {"fields": ('number', 'site_key', 'description', 'description_ru', 'category', 'status', 'status_date', 'phone', 'warehouse_index')}),
+        (_("Отделение"), {"fields": ('number', 'site_key', 'description', 'description_ru', 'warehouse_type', 'category', 'status', 'status_date', 'phone', 'warehouse_index')}),
         (_("Адрес"), {"fields": ('settlement', 'short_address', 'short_address_ru', 'postal_code', 'latitude', 'longitude', 'city_description', 'city_description_ru', 'settlement_description', 'settlement_area_description', 'settlement_regions_description', 'settlement_type_description', 'settlement_type_description_ru', 'region_city', 'location')}),
         (_("Услуги и оборудование"), {"fields": ('post_finance', 'bicycle_parking', 'payment_access', 'pos_terminal', 'international_shipping', 'warehouse_illusha', 'warehouse_for_agent', 'generator_enabled', 'work_in_mobile_awis', 'deny_to_select', 'can_get_money_transfer', 'has_mirror', 'has_fitting_room', 'only_receiving_parcel')}),
         (_("Ограничения и почтоматы"), {"fields": ('total_max_weight', 'place_max_weight', 'max_declared_cost', 'self_service_workplaces_count', 'sending_dimensions', 'receiving_dimensions', 'post_machine_type', 'postomat_for')}),
         (_("Графики"), {"fields": ('schedule', 'reception', 'delivery')}),
-        (_("Идентификаторы источника"), {"fields": ('ref', 'settlement_ref', 'city_ref', 'warehouse_type_ref', 'district_code', 'direct', 'beacon_code')}),
+        (_("Идентификаторы источника"), {"fields": ('ref', 'settlement_ref', 'city_ref', 'district_code', 'direct', 'beacon_code')}),
         (_("Исходный ответ API"), {"fields": ("raw_data",), "classes": ("collapse",)}),
     )
 

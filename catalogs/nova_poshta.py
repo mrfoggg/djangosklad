@@ -7,7 +7,7 @@ from uuid import UUID
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
-from .models import NovaPoshtaSettlementDetails, NovaPoshtaWarehouse
+from .models import NovaPoshtaSettlementDetails, NovaPoshtaWarehouse, NovaPoshtaWarehouseType
 
 from .models import NovaPoshtaArea, NovaPoshtaRegion, NovaPoshtaSettlement, NovaPoshtaSettlementType
 
@@ -390,7 +390,7 @@ WAREHOUSE_FIELDS = {
 }
 
 
-def _build_warehouse(item, settlements, selected_settlement):
+def _build_warehouse(item, settlements, selected_settlement, warehouse_types=None):
     try:
         def optional_ref(value):
             ref = UUID(value) if value else None
@@ -405,6 +405,8 @@ def _build_warehouse(item, settlements, selected_settlement):
             city_ref=optional_ref(item.get("CityRef")),
             warehouse_type_ref=UUID(item["TypeOfWarehouse"]), raw_data=item,
         )
+        if warehouse_types is not None and obj.warehouse_type_ref in warehouse_types:
+            obj.warehouse_type_id = obj.warehouse_type_ref
         for name, api_name in WAREHOUSE_FIELDS.items():
             field = obj._meta.get_field(name)
             if name in ("number", "description"):
@@ -426,6 +428,7 @@ def _build_warehouse(item, settlements, selected_settlement):
 def sync_warehouses(settlement=None):
     """Загрузить до пустой страницы, проверить весь ответ и атомарно обновить справочник."""
     settlements = set(NovaPoshtaSettlement.objects.values_list("ref", flat=True))
+    warehouse_types = set(NovaPoshtaWarehouseType.objects.values_list("ref", flat=True))
     objects, seen = [], set()
     for page in range(1, 1001):
         properties = {"Page": str(page), "Limit": "500"}
@@ -435,7 +438,7 @@ def sync_warehouses(settlement=None):
         if not data:
             break
         for item in data:
-            obj = _build_warehouse(item, settlements, settlement)
+            obj = _build_warehouse(item, settlements, settlement, warehouse_types)
             if obj.ref in seen:
                 raise NovaPoshtaError("API повторяет отделения между страницами. Обновление отменено.")
             seen.add(obj.ref)
@@ -447,10 +450,48 @@ def sync_warehouses(settlement=None):
     with transaction.atomic():
         NovaPoshtaWarehouse.objects.bulk_create(
             objects, batch_size=500, update_conflicts=True, unique_fields=["ref"],
-            update_fields=["settlement", "settlement_ref", "city_ref", "warehouse_type_ref", *WAREHOUSE_FIELDS, "raw_data", "is_active", "updated"],
+            update_fields=["settlement", "settlement_ref", "city_ref", "warehouse_type_ref", "warehouse_type", *WAREHOUSE_FIELDS, "raw_data", "is_active", "updated"],
         )
         scope = NovaPoshtaWarehouse.objects.all()
         if settlement is not None:
             scope = scope.filter(settlement_ref=settlement.ref)
         deactivated = _deactivate_missing(scope, seen)
     return SettlementSyncResult(len(objects), deactivated)
+
+
+def sync_warehouse_types():
+    data = _fetch_catalog("getWarehouseTypes", {})
+    if not data:
+        raise NovaPoshtaError("Новая почта вернула пустой справочник типов отделений.")
+    objects = {}
+    try:
+        for item in data:
+            obj = NovaPoshtaWarehouseType(
+                ref=UUID(item["Ref"]), description=item["Description"],
+                description_ru=item.get("DescriptionRu") or "",
+            )
+            obj.clean_fields()
+            if obj.ref in objects:
+                raise ValueError("Duplicate ref")
+            objects[obj.ref] = obj
+    except (KeyError, TypeError, ValueError, AttributeError, ValidationError) as exc:
+        raise NovaPoshtaError("Некорректные данные типа отделения Новой почты.") from exc
+    created = updated = unchanged = 0
+    with transaction.atomic():
+        for ref, obj in objects.items():
+            current, is_new = NovaPoshtaWarehouseType.objects.get_or_create(
+                ref=ref, defaults={"description": obj.description, "description_ru": obj.description_ru},
+            )
+            if is_new:
+                created += 1
+            elif (current.description, current.description_ru, current.is_active) != (obj.description, obj.description_ru, True):
+                current.description = obj.description
+                current.description_ru = obj.description_ru
+                current.is_active = True
+                current.save(update_fields=["description", "description_ru", "is_active", "updated"])
+                updated += 1
+            else:
+                unchanged += 1
+            NovaPoshtaWarehouse.objects.filter(warehouse_type_ref=ref).exclude(warehouse_type_id=ref).update(warehouse_type_id=ref)
+        deactivated = _deactivate_missing(NovaPoshtaWarehouseType.objects.all(), objects)
+    return AreaSyncResult(created, updated, unchanged, deactivated)

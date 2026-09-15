@@ -964,7 +964,25 @@ class ContactPersonPhone(BasePhoneLink):
         constraints = BasePhoneLink.Meta.constraints + phone_link_constraints("contact_person")
 
 
+class NovaPoshtaWarehouseType(NovaPoshtaCatalog):
+    ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
+    description = models.CharField(_("Название"), max_length=255)
+    description_ru = models.CharField(_("Название на русском"), max_length=255, blank=True)
+
+    class Meta:
+        verbose_name = _("Новая почта: тип отделения")
+        verbose_name_plural = _("Новая почта: типы отделений")
+        ordering = ("description", "ref")
+
+    def __str__(self):
+        return self.description
+
+
 class NovaPoshtaWarehouse(NovaPoshtaCatalog):
+    warehouse_type = models.ForeignKey(
+        NovaPoshtaWarehouseType, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="warehouses", verbose_name=_("Тип отделения"),
+    )
     ref = models.UUIDField(primary_key=True, verbose_name=_("Ref Новой почты"))
     settlement = models.ForeignKey(
         NovaPoshtaSettlement, on_delete=models.PROTECT, null=True, blank=True,
