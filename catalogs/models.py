@@ -3,9 +3,11 @@ from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.utils.translation import gettext_lazy as _
+from django.utils.translation import get_language, gettext_lazy as _
 from django_countries.fields import CountryField
 from mptt.models import MPTTModel, TreeForeignKey
+from phonenumber_field.modelfields import PhoneNumberField
+from phonenumbers import PhoneNumberType, carrier, geocoder, number_type
 
 
 class BaseModel(models.Model):
@@ -43,6 +45,9 @@ class Category(MPTTModel, BaseModel):
 
 
 class Contractor(BaseModel):
+    phones = models.ManyToManyField("PhoneNumber", through="ContractorPhone", verbose_name=_("Телефоны"))
+    contact_persons = models.ManyToManyField("ContactPerson", through="ContractorContactPerson", verbose_name=_("Контактные лица"))
+
     class LegalType(models.TextChoices):
         INDIVIDUAL = "IND", _("Физическое лицо")
         FOP = "FOP", _("ФОП")
@@ -811,3 +816,149 @@ class DeliveryMethod(BaseModel):
 
     def __str__(self):
         return self.name
+
+
+class PhoneNumber(BaseModel):
+    number = PhoneNumberField(_("Номер телефона"), unique=True)
+    has_viber = models.BooleanField(_("Viber"), null=True, blank=True, default=None)
+    has_telegram = models.BooleanField(_("Telegram"), null=True, blank=True, default=None)
+    has_whatsapp = models.BooleanField(_("WhatsApp"), null=True, blank=True, default=None)
+
+    class Meta:
+        verbose_name = _("Телефонный номер")
+        verbose_name_plural = _("Телефонные номера")
+        ordering = ("number",)
+
+    def __str__(self):
+        return self.number.as_international
+
+    @property
+    def operator_name(self):
+        """Исходный оператор по справочнику кодов; перенос номера не учитывается."""
+        if not self.number or not self.number.is_valid():
+            return ""
+        return carrier.name_for_number(self.number, "en")
+
+    @property
+    def number_type_label(self):
+        if not self.number or not self.number.is_valid():
+            return ""
+        labels = {
+            PhoneNumberType.FIXED_LINE: _("Стационарный"),
+            PhoneNumberType.MOBILE: _("Мобильный"),
+            PhoneNumberType.FIXED_LINE_OR_MOBILE: _("Стационарный или мобильный"),
+            PhoneNumberType.TOLL_FREE: _("Бесплатный"),
+            PhoneNumberType.PREMIUM_RATE: _("С повышенной тарификацией"),
+            PhoneNumberType.SHARED_COST: _("С разделением стоимости"),
+            PhoneNumberType.VOIP: _("IP-телефония"),
+            PhoneNumberType.PERSONAL_NUMBER: _("Персональный номер"),
+            PhoneNumberType.PAGER: _("Пейджер"),
+            PhoneNumberType.UAN: _("Универсальный номер доступа"),
+            PhoneNumberType.VOICEMAIL: _("Голосовая почта"),
+        }
+        return labels.get(number_type(self.number), _("Неизвестно"))
+
+    @property
+    def region_description(self):
+        """Географическая привязка кода, а не текущее местоположение абонента."""
+        if not self.number or not self.number.is_valid():
+            return ""
+        language = (get_language() or "en").split("-")[0]
+        return geocoder.description_for_number(self.number, language)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+
+class ContactPerson(BaseModel):
+    last_name = models.CharField(_("Фамилия"), max_length=150)
+    first_name = models.CharField(_("Имя"), max_length=150, blank=True)
+    middle_name = models.CharField(_("Отчество"), max_length=150, blank=True)
+    email = models.EmailField(_("Email"), blank=True)
+    comment = models.TextField(_("Комментарий"), blank=True)
+    phones = models.ManyToManyField(PhoneNumber, through="ContactPersonPhone", verbose_name=_("Телефоны"))
+
+    class Meta:
+        verbose_name = _("Контактное лицо")
+        verbose_name_plural = _("Контактные лица")
+        ordering = ("last_name", "first_name", "pk")
+
+    def __str__(self):
+        return " ".join(filter(None, (self.last_name, self.first_name, self.middle_name)))
+
+
+class ContactRole(models.Model):
+    code = models.SlugField(_("Код"), unique=True)
+    name = models.CharField(_("Название"), max_length=150)
+
+    class Meta:
+        verbose_name = _("Роль контактного лица")
+        verbose_name_plural = _("Роли контактных лиц")
+        ordering = ("name",)
+
+    def __str__(self):
+        return self.name
+
+
+class ContractorContactPerson(BaseModel):
+    contractor = models.ForeignKey(Contractor, on_delete=models.CASCADE, related_name="contact_links", verbose_name=_("Контрагент"))
+    contact_person = models.ForeignKey(ContactPerson, on_delete=models.CASCADE, related_name="contractor_links", verbose_name=_("Контактное лицо"))
+    roles = models.ManyToManyField(ContactRole, verbose_name=_("Роли"), blank=True)
+    note = models.CharField(_("Примечание"), max_length=150, blank=True)
+
+    class Meta:
+        verbose_name = _("Контакт контрагента")
+        verbose_name_plural = _("Контакты контрагента")
+        constraints = [models.UniqueConstraint(fields=("contractor", "contact_person"), name="unique_contractor_contact")]
+
+    def __str__(self):
+        return f"{self.contractor}: {self.contact_person}"
+
+
+class BasePhoneLink(BaseModel):
+    phone = models.ForeignKey(PhoneNumber, on_delete=models.PROTECT, verbose_name=_("Телефон"))
+    for_communication = models.BooleanField(_("Для связи"), default=True)
+    for_delivery = models.BooleanField(_("Для доставки"), default=False)
+    is_primary_for_communication = models.BooleanField(_("Основной для связи"), default=False)
+    is_primary_for_delivery = models.BooleanField(_("Основной для доставки"), default=False)
+    label = models.CharField(_("Подпись"), max_length=150, blank=True)
+    comment = models.TextField(_("Комментарий"), blank=True)
+
+    class Meta:
+        abstract = True
+        constraints = [
+            models.CheckConstraint(condition=models.Q(is_primary_for_communication=False) | models.Q(for_communication=True), name="%(class)s_primary_comm_purpose"),
+            models.CheckConstraint(condition=models.Q(is_primary_for_delivery=False) | models.Q(for_delivery=True), name="%(class)s_primary_delivery_purpose"),
+        ]
+
+    def __str__(self):
+        return str(self.phone)
+
+
+def phone_link_constraints(owner):
+    return [
+        models.UniqueConstraint(fields=(owner, "phone"), name=f"unique_{owner}_phone"),
+        models.UniqueConstraint(fields=(owner,), condition=models.Q(is_primary_for_communication=True), name=f"unique_{owner}_primary_comm"),
+        models.UniqueConstraint(fields=(owner,), condition=models.Q(is_primary_for_delivery=True), name=f"unique_{owner}_primary_delivery"),
+    ]
+
+
+class ContractorPhone(BasePhoneLink):
+    contractor = models.ForeignKey(Contractor, on_delete=models.CASCADE, related_name="phone_links", verbose_name=_("Контрагент"))
+
+    class Meta(BasePhoneLink.Meta):
+        abstract = False
+        verbose_name = _("Телефон контрагента")
+        verbose_name_plural = _("Телефоны контрагента")
+        constraints = BasePhoneLink.Meta.constraints + phone_link_constraints("contractor")
+
+
+class ContactPersonPhone(BasePhoneLink):
+    contact_person = models.ForeignKey(ContactPerson, on_delete=models.CASCADE, related_name="phone_links", verbose_name=_("Контактное лицо"))
+
+    class Meta(BasePhoneLink.Meta):
+        abstract = False
+        verbose_name = _("Телефон контактного лица")
+        verbose_name_plural = _("Телефоны контактного лица")
+        constraints = BasePhoneLink.Meta.constraints + phone_link_constraints("contact_person")

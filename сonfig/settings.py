@@ -160,3 +160,7 @@ DEFAULT_CURRENCY = "UAH"
 UNFOLD = {
     "SHOW_LANGUAGES": True,
 }
+
+
+PHONENUMBER_DEFAULT_REGION = "UA"  # Украина (+380), страна по умолчанию в форме номера
+PHONENUMBER_DB_FORMAT = "E164"

@@ -9,17 +9,25 @@ from django.urls import reverse
 from django.db import connection, models
 from django.db.models.functions import Collate
 from django.utils.translation import gettext_lazy as _
+from django.utils.html import format_html_join
 from django_countries.widgets import CountrySelectWidget
 from mptt.admin import DraggableMPTTAdmin
 from unfold.admin import ModelAdmin, StackedInline, TabularInline
 from unfold.contrib.forms.widgets import WysiwygWidget
 from unfold.decorators import action
+from unfold.widgets import UnfoldAdminCheckboxSelectMultipleWidget
 
-from .forms import NovaPoshtaRegionUpdateForm, NovaPoshtaSettlementUpdateForm
+from .forms import NovaPoshtaRegionUpdateForm, NovaPoshtaSettlementUpdateForm, PhoneNumberForm
 from .nova_poshta import sync_settlement_details
 from .nova_poshta import NovaPoshtaError, sync_areas, sync_regions, sync_settlements, sync_settlement_types
 
 from .models import (
+    ContactPerson,
+    ContactRole,
+    ContractorContactPerson,
+    ContractorPhone,
+    ContactPersonPhone,
+    PhoneNumber,
     Brand,
     BrandSupplier,
     Category,
@@ -513,6 +521,101 @@ class CategoryAdmin(DraggableMPTTAdmin, ModelAdmin):
     list_filter_submit = True  # Кнопка применения фильтров
 
 
+class PhoneLinkInline(StackedInline):
+    extra = 0
+    tab = True
+    autocomplete_fields = ("phone",)
+    fields = ("phone", "label", ("for_communication", "is_primary_for_communication"), ("for_delivery", "is_primary_for_delivery"), "comment")
+
+
+class ContractorPhoneInline(PhoneLinkInline):
+    model = ContractorPhone
+
+
+class ContactPersonPhoneInline(PhoneLinkInline):
+    model = ContactPersonPhone
+
+
+class ContractorContactPersonInline(TabularInline):
+    model = ContractorContactPerson
+    extra = 0
+    tab = True
+    autocomplete_fields = ("contact_person",)
+
+    def formfield_for_manytomany(self, db_field, request, **kwargs):
+        if db_field.name == "roles":
+            kwargs["widget"] = UnfoldAdminCheckboxSelectMultipleWidget
+            kwargs["help_text"] = _("Можно выбрать несколько ролей.")
+        return super().formfield_for_manytomany(db_field, request, **kwargs)
+
+
+class ContactPersonContractorInline(ContractorContactPersonInline):
+    autocomplete_fields = ("contractor",)
+
+
+@admin.register(PhoneNumber)
+class PhoneNumberAdmin(ModelAdmin):
+    form = PhoneNumberForm
+    list_display = ("number", "number_info", "has_viber", "has_telegram", "has_whatsapp")
+    search_fields = ("number",)
+    list_filter = ("has_viber", "has_telegram", "has_whatsapp")
+    readonly_fields = (*BASE_READONLY_DATES, "number_info", "linked_contractors", "linked_contact_persons")
+    fields = (
+        "number",
+        "number_info",
+        ("has_viber", "has_telegram", "has_whatsapp"),
+        "linked_contractors",
+        "linked_contact_persons",
+        ("created", "updated"),
+    )
+
+
+    @admin.display(description=_("Информация о номере"), empty_value="—")
+    def number_info(self, obj):
+        if not obj:
+            return ""
+        return " · ".join(
+            str(value) for value in (
+                obj.number_type_label, obj.operator_name, obj.region_description,
+            ) if value
+        )
+
+    @admin.display(description=_("Связанные контрагенты"))
+    def linked_contractors(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        owners = Contractor.objects.filter(phones=obj)
+        return format_html_join(
+            ", ", '<a href="{}">{}</a>',
+            ((reverse("admin:catalogs_contractor_change", args=[owner.pk]), str(owner)) for owner in owners),
+        ) or "—"
+
+    @admin.display(description=_("Связанные контактные лица"))
+    def linked_contact_persons(self, obj):
+        if not obj or not obj.pk:
+            return "—"
+        owners = ContactPerson.objects.filter(phones=obj)
+        return format_html_join(
+            ", ", '<a href="{}">{}</a>',
+            ((reverse("admin:catalogs_contactperson_change", args=[owner.pk]), str(owner)) for owner in owners),
+        ) or "—"
+
+
+@admin.register(ContactRole)
+class ContactRoleAdmin(ModelAdmin):
+    list_display = ("name", "code")
+    search_fields = ("name", "code")
+
+
+@admin.register(ContactPerson)
+class ContactPersonAdmin(ModelAdmin):
+    list_display = ("last_name", "first_name", "middle_name", "email")
+    search_fields = ("last_name", "first_name", "middle_name", "email", "phones__number")
+    readonly_fields = BASE_READONLY_DATES
+    exclude = ("phones",)
+    inlines = (ContactPersonPhoneInline, ContactPersonContractorInline)
+
+
 @admin.register(Contractor)
 class ContractorAdmin(BaseCatalogAdmin):
     # Поиск по ИНН работает через связь legal_details
@@ -534,6 +637,8 @@ class ContractorAdmin(BaseCatalogAdmin):
 
     def get_inlines(self, request, obj=None):
         inlines = [
+            ContractorPhoneInline,
+            ContractorContactPersonInline,
             LegalDetailsInline,
             ContractorBankAccountInline,
             ContractorLinkInline,
